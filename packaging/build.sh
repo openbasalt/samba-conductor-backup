@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build this repository's Debian package(s) for one or more architectures:
 # static binaries (CGO off), systemd units with packaged paths, man pages and
-# changelog, the .deb (nfpm) and one CycloneDX SBOM per package, all in dist/.
+# changelog, third-party license texts, the .deb (nfpm) and one CycloneDX
+# SBOM per package, all in dist/.
 #
 #   packaging/build.sh [amd64] [arm64]      (default: both)
 #   VERSION=1.2.3 packaging/build.sh        (override the version from git)
@@ -114,6 +115,18 @@ for arch in "${ARCHES[@]}"; do
     printf '%s (%s-%s) stable; urgency=medium\n\n  * Upstream release %s.\n\n -- %s  %s\n' \
       "$pkg" "$VERSION_UPSTREAM" "$REVISION" "$VERSION_UPSTREAM" "$MAINTAINER" "$CHANGELOG_DATE" |
       gzip -9n >"$out/doc/$pkg/changelog.Debian.gz"
+
+    # License texts and notices of everything the binaries link: the Go
+    # standard library and each module, from the binaries' build info and the
+    # module cache (packaging/third-party-licenses.py; fails on a module
+    # without a license or with a NOTICE the repository NOTICE does not carry).
+    bins=()
+    for spec in "${BINARIES[@]}"; do
+      [ "${spec%%=*}" = "$pkg" ] || continue
+      for bin in ${spec#*=}; do bins+=("$out/bin/$bin"); done
+    done
+    python3 packaging/third-party-licenses.py --notice NOTICE "${bins[@]}" >"$out/doc/$pkg/THIRD-PARTY-LICENSES"
+    gzip -9n <"$out/doc/$pkg/THIRD-PARTY-LICENSES" >"$out/doc/$pkg/THIRD-PARTY-LICENSES.gz"
 
     # 4. The package.
     ARCH="$arch" DEB_VERSION="$VERSION_UPSTREAM" DEB_REVISION="$REVISION" BUILD="$out" \

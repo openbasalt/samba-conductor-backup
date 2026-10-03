@@ -84,8 +84,9 @@ GOWORK=off go mod tidy
 - Commit messages: a short summary line prefixed with the area
   (`web: ...`, `helper: ...`), then what changed and why.
 
-By submitting a contribution you agree that it is licensed under this
-repository's license (see [LICENSE](LICENSE)).
+By submitting a contribution you agree that it is licensed under the
+Apache License, Version 2.0, this repository's license (see [LICENSE](LICENSE)
+and [NOTICE](NOTICE)), as section 5 of that license provides.
 
 ## Code of conduct
 

@@ -265,4 +265,4 @@ make lintian
 Lab: `../planning/lab/backup-infra.sh`, `drill-up.sh`, `backup-install.sh`,
 `p3-snapshot.sh`, `restore-exercise.sh`; see `../planning/docs/lab.md`.
 
-License: MIT.
+License: Apache-2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)).

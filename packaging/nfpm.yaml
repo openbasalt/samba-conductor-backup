@@ -13,7 +13,7 @@ priority: optional
 maintainer: Samba Conductor maintainers <samba-conductor@openbasalt.org>
 vendor: OpenBasalt
 homepage: https://github.com/openbasalt/samba-conductor-backup
-license: MIT
+license: Apache-2.0
 description: |-
   encrypted Samba AD backups, restore and restore drills
   conductor-backup takes online backups of a Samba Active Directory domain
@@ -86,6 +86,13 @@ contents:
     file_info: {mode: 0644}
   - src: packaging/copyright
     dst: /usr/share/doc/conductor-backup/copyright
+    file_info: {mode: 0644}
+  - src: NOTICE
+    dst: /usr/share/doc/conductor-backup/NOTICE
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/doc/conductor-backup/THIRD-PARTY-LICENSES.gz
+    dst: /usr/share/doc/conductor-backup/THIRD-PARTY-LICENSES.gz
     file_info: {mode: 0644}
   - expand: true
     src: ${BUILD}/doc/conductor-backup/changelog.Debian.gz

@@ -14,6 +14,14 @@ import uuid
 # Modules of the Samba Conductor family.
 FAMILY = "github.com/openbasalt/samba-conductor"
 
+# Licenses cyclonedx-gomod does not detect (no license evidence in its
+# output), read by hand from the module; packaging/third-party-licenses.py
+# ships their texts.
+KNOWN_LICENSES = {
+    "std": "BSD-3-Clause",
+    "github.com/tinylib/msgp": "MIT",
+}
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -39,7 +47,7 @@ def main():
         "name": args.name,
         "version": args.version,
         "purl": purl,
-        "licenses": [{"license": {"id": "MIT"}}],
+        "licenses": [{"license": {"id": "Apache-2.0"}}],
     }
 
     components = {}
@@ -58,6 +66,10 @@ def main():
                 # so it is not reproducible. Release builds use the pinned
                 # versions, whose hashes come from the module cache.
                 c.pop("hashes", None)
+            detected = c.get("licenses") or c.get("evidence", {}).get("licenses")
+            if not detected and c.get("name") in KNOWN_LICENSES:
+                # Concluded by reading the module's license, not detected.
+                c["licenses"] = [{"license": {"id": KNOWN_LICENSES[c["name"]]}}]
             components.setdefault(c["bom-ref"], c)
         for d in doc.get("dependencies", []):
             deps.setdefault(d["ref"], set()).update(d.get("dependsOn", []))
