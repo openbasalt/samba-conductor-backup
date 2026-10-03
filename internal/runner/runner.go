@@ -461,7 +461,11 @@ type PruneReport struct {
 	Kept        []string
 	Deleted     []string
 	Incomplete  []string
-	Errors      []string
+	// Unverified: archive and manifest present but the manifest does not
+	// verify with a trusted key (e.g. signed by this DC's previous key) or
+	// does not match the archive. Never deleted: an operator decides.
+	Unverified []string
+	Errors     []string
 }
 
 // trustedBackupKeys are the keys whose manifests count as this DC's.
@@ -471,11 +475,13 @@ func (r *Runner) trustedBackupKeys() []sign.PublicKey {
 }
 
 // complete lists, at one destination, this DC's backups that have an
-// archive and a signed manifest of the same size.
-func (r *Runner) complete(ctx context.Context, s dest.Store) (map[string]time.Time, []string, error) {
+// archive and a signed manifest of the same size (good), those missing one
+// of the two (incomplete) and those whose manifest does not verify
+// (unverified).
+func (r *Runner) complete(ctx context.Context, s dest.Store) (map[string]time.Time, []string, []string, error) {
 	objs, err := s.List(ctx, dest.DomainPrefix(r.Cfg.Realm))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	sizes := map[string]int64{}
 	manifests := map[string]bool{}
@@ -496,29 +502,33 @@ func (r *Runner) complete(ctx context.Context, s dest.Store) (map[string]time.Ti
 		ids[id] = true
 	}
 	good := map[string]time.Time{}
-	var incomplete []string
+	var incomplete, unverified []string
 	for id := range ids {
 		at, err := helper.BackupIDTime(id)
 		if err != nil || !strings.HasSuffix(id, "-"+r.Cfg.DC) {
 			continue // not ours (another DC, or foreign objects)
 		}
+		size, has := sizes[id]
+		if !has || !manifests[id] {
+			incomplete = append(incomplete, id)
+			continue
+		}
 		ok := false
-		if size, has := sizes[id]; has && manifests[id] {
-			if b, err := dest.ReadAll(ctx, s, dest.ManifestKey(r.Cfg.Realm, id), 1<<20); err == nil {
-				var m manifest.Manifest
-				if _, err := sign.Open(b, r.trustedBackupKeys(), &m); err == nil && m.Validate(r.Cfg.Realm) == nil && m.Size == size && m.ID == id {
-					ok = true
-				}
+		if b, err := dest.ReadAll(ctx, s, dest.ManifestKey(r.Cfg.Realm, id), 1<<20); err == nil {
+			var m manifest.Manifest
+			if _, err := sign.Open(b, r.trustedBackupKeys(), &m); err == nil && m.Validate(r.Cfg.Realm) == nil && m.Size == size && m.ID == id {
+				ok = true
 			}
 		}
 		if ok {
 			good[id] = at
 		} else {
-			incomplete = append(incomplete, id)
+			unverified = append(unverified, id)
 		}
 	}
 	sort.Strings(incomplete)
-	return good, incomplete, nil
+	sort.Strings(unverified)
+	return good, incomplete, unverified, nil
 }
 
 // Prune applies the retention policy at every destination.
@@ -554,7 +564,8 @@ func (r *Runner) prune(ctx context.Context, st *helper.BackupStatus, priv *state
 	var reports []PruneReport
 	for _, s := range r.Stores {
 		rep := PruneReport{Destination: s.Name()}
-		good, incomplete, err := r.complete(ctx, s)
+		good, incomplete, unverified, err := r.complete(ctx, s)
+		rep.Unverified = unverified
 		if err != nil {
 			rep.Errors = append(rep.Errors, short(err))
 			reports = append(reports, rep)
@@ -598,7 +609,7 @@ func (r *Runner) prune(ctx context.Context, st *helper.BackupStatus, priv *state
 		}
 		reports = append(reports, rep)
 		r.Log.Info("retention", "destination", s.Name(), "kept", len(rep.Kept), "deleted", len(rep.Deleted),
-			"incomplete", len(rep.Incomplete), "errors", len(rep.Errors), "dry_run", dryRun)
+			"incomplete", len(rep.Incomplete), "unverified", len(rep.Unverified), "errors", len(rep.Errors), "dry_run", dryRun)
 	}
 	if !dryRun {
 		priv.LastPrune = now

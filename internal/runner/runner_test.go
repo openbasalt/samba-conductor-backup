@@ -292,6 +292,17 @@ func TestPruneKeepsLastGood(t *testing.T) {
 	if _, ok := st.LastGood(); !ok {
 		t.Fatal("status lost the last good backup")
 	}
+	// The DC gets a new signing key (e.g. rebuilt after a restore): its
+	// older backups no longer verify; they are reported, never deleted,
+	// even long after.
+	e.r.Key, _ = sign.Generate()
+	e.fh.fail = false
+	_ = e.r.Run(ctx, Options{Force: true})
+	e.now = e.now.AddDate(0, 0, 10)
+	reports, err = e.r.Prune(ctx, false)
+	if err != nil || len(reports[0].Unverified) != 1 || reports[0].Unverified[0] != newest || len(reports[0].Deleted) != 0 {
+		t.Fatalf("re-keyed DC: %+v %v", reports[0], err)
+	}
 }
 
 func TestDrillRequestAndReport(t *testing.T) {

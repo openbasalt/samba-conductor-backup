@@ -53,8 +53,8 @@ privileged part):
   prune [--dry-run]           apply the retention policy
 
 Anywhere you can read the bucket (as root, with the offline key):
-  restore ID|latest --identity FILE --target DIR [--with-conductor-state]
-          [--newservername NAME] [--host-ip IP] [--destination N]
+  restore ID|latest --identity FILE --target DIR --newservername NAME
+          [--with-conductor-state] [--host-ip IP] [--destination N]
 
 On a drill host (root; never on a DC):
   drill [--now] [--backup ID]  run a requested (or forced) restore drill
@@ -425,8 +425,8 @@ func cmdPrune(ctx context.Context, log *slog.Logger, args []string) error {
 		if *dry {
 			verb = "would delete"
 		}
-		fmt.Printf("%s: keep %d (%s); %s %d %v; incomplete %v; errors %v\n", rep.Destination, len(rep.Kept), strings.Join(rep.Kept, " "),
-			verb, len(rep.Deleted), rep.Deleted, rep.Incomplete, rep.Errors)
+		fmt.Printf("%s: keep %d (%s); %s %d %v; incomplete %v; unverified (kept) %v; errors %v\n", rep.Destination, len(rep.Kept),
+			strings.Join(rep.Kept, " "), verb, len(rep.Deleted), rep.Deleted, rep.Incomplete, rep.Unverified, rep.Errors)
 	}
 	return err
 }
@@ -436,12 +436,12 @@ func cmdRestore(ctx context.Context, args []string) error {
 	identity := fs.String("identity", "", "age identity file (the operator's offline key)")
 	target := fs.String("target", "", "target directory")
 	withState := fs.Bool("with-conductor-state", false, "install conductor's database (/var/lib/conductor/conductor.db)")
-	name := fs.String("newservername", "", "NetBIOS name of the restored DC (default: the DC of the backup)")
+	name := fs.String("newservername", "", "NetBIOS name of the restored DC (required; not the name of an old DC)")
 	hostIP := fs.String("host-ip", "", "IPv4 address of the restored DC (optional)")
 	only := fs.String("destination", "", "destination to restore from (default: the first)")
 	pos := parse(fs, args)
-	if len(pos) != 1 || *identity == "" || *target == "" {
-		return errors.New("usage: restore ID|latest --identity FILE --target DIR")
+	if len(pos) != 1 || *identity == "" || *target == "" || *name == "" {
+		return errors.New("usage: restore ID|latest --identity FILE --target DIR --newservername NAME")
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {

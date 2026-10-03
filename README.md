@@ -37,7 +37,8 @@ a full-forest restore exercise (`../conductor/docs/usage-p3.md`).
   Backups page, with re-authentication): daily at a UTC time or every 1-12
   hours, retried every hour until one succeeds; keep N daily, M weekly, K
   monthly; nothing younger than 24 h and never the last good backup is
-  deleted.
+  deleted; a backup whose manifest does not verify (e.g. signed with a
+  previous key of the DC) is reported and never deleted.
 - **Alerts**: e-mail (STARTTLS/TLS) and an optional signed webhook when a
   backup fails or a destination misses one, when the last good backup is
   older than the policy, when a drill fails or is overdue; conductor's
@@ -163,7 +164,7 @@ conductor-backup status [--json]
 conductor-backup list [--destination N]
 conductor-backup verify ID|latest           # download + SHA-256, no decryption
 conductor-backup prune [--dry-run]
-conductor-backup restore ID|latest --identity KEY --target DIR [--with-conductor-state] [--newservername N] [--host-ip IP]
+conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP]
 conductor-backup drill [--now] [--backup ID]
 conductor-backup keygen signing|age --out FILE
 conductor-backup pubkey FILE

@@ -34,8 +34,10 @@ type Options struct {
 	// Target directory (created; its "samba" subdirectory must not exist
 	// or be empty).
 	Target string
-	// NewServerName: NetBIOS name of the restored DC (default: the DC the
-	// backup was taken on).
+	// NewServerName: NetBIOS name of the restored DC. Required, and it must
+	// not be the name of a DC in the backup: samba-tool adds the new DC's
+	// account first and then removes every old DC from the restored
+	// database (so the old names are gone afterwards).
 	NewServerName string
 	HostIP        string
 	// WithConductorState installs conductor's database at ConductorDB.
@@ -136,9 +138,10 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	}
 	fmt.Fprintf(log, "decrypted: %s, taken on %s at %s, %d-%d users\n", meta.Realm, meta.DC, meta.CreatedAt.Format(time.RFC3339), meta.Users.Min, meta.Users.Max)
 
-	name := o.NewServerName
-	if name == "" {
-		name = strings.ToUpper(meta.DC)
+	name := strings.ToUpper(o.NewServerName)
+	if name == "" || strings.EqualFold(name, meta.DC) {
+		return nil, fmt.Errorf("--newservername is required and must differ from %s: samba-tool gives the restored DC a new name "+
+			"and removes the old DCs (%s included) from the restored database", strings.ToUpper(meta.DC), strings.ToUpper(meta.DC))
 	}
 	tool := o.SambaTool
 	if tool == "" {
@@ -273,12 +276,15 @@ func NextSteps(r *Result) string {
 	fmt.Fprintf(&b, "Restored backup %s (domain %s, taken on %s at %s) into %s as DC %s, in %s.\n",
 		r.BackupID, r.Meta.Realm, r.Meta.DC, r.Meta.CreatedAt.Format(time.RFC3339), r.SambaDir, r.ServerName, r.Duration.Round(time.Second))
 	b.WriteString("SIDs and GUIDs are those of the backup. Every FSMO role is now held by this DC and the old DCs were removed\n")
-	b.WriteString("from the restored database; the krbtgt keys were renewed (tickets of the old domain are invalid).\n\n")
+	b.WriteString("from the restored database; the krbtgt keys were renewed (tickets of the old domain are invalid).\n")
+	fmt.Fprintf(&b, "The host must be named %s.%s (this DC's new name).\n\n", strings.ToLower(r.ServerName), domain)
 	b.WriteString("Next steps (full-forest recovery, conductor/docs/restore.md):\n")
 	fmt.Fprintf(&b, "  1. Make sure no old DC of %s is running on the network.\n", r.Meta.Realm)
 	fmt.Fprintf(&b, "  2. Use the restored configuration:\n       systemctl stop samba-ad-dc\n       mv /etc/samba/smb.conf /etc/samba/smb.conf.pre-restore\n       ln -s %s/etc/smb.conf /etc/samba/smb.conf\n       cp %s/private/krb5.conf /etc/krb5.conf\n", r.SambaDir, r.SambaDir)
 	if len(r.TLSPlaced) > 0 {
-		fmt.Fprintf(&b, "  3. TLS: the DC's certificate files were put back: %s\n", strings.Join(r.TLSPlaced, ", "))
+		fmt.Fprintf(&b, "  3. TLS: the old DC's certificate files were put back (%s); issue one for %s.%s from your CA and replace them\n",
+			strings.Join(r.TLSPlaced, ", "), strings.ToLower(r.ServerName), domain)
+		b.WriteString("     (LDAPS clients verify the host name).\n")
 	} else {
 		fmt.Fprintf(&b, "  3. TLS: install the DC certificate where smb.conf names it (copies of the original files are under %s), or let Samba generate one.\n", r.FilesDir)
 	}
@@ -288,12 +294,14 @@ func NextSteps(r *Result) string {
 	b.WriteString("  6. Time: chrony serving signed time through Samba's ntp_signd socket, as on any DC.\n")
 	switch {
 	case r.ConductorInstalled:
-		fmt.Fprintf(&b, "  7. conductor: its database is in place (%s). Restore /etc/conductor/conductor.toml from %s/etc/conductor/, the TOTP key\n", r.Conductor, r.FilesDir)
-		b.WriteString("     (/etc/conductor/credentials/totp-key) from where you keep it, then: systemctl restart conductor-helper conductor; conductor audit verify\n")
+		fmt.Fprintf(&b, "  7. conductor: its database is in place (%s). Restore /etc/conductor/conductor.toml from %s/etc/conductor/ and change\n", r.Conductor, r.FilesDir)
+		fmt.Fprintf(&b, "     its [domain] preferred/dcs to %s.%s, put the TOTP key (/etc/conductor/credentials/totp-key) back from where you keep it,\n", strings.ToLower(r.ServerName), domain)
+		b.WriteString("     then: systemctl restart conductor-helper conductor; conductor audit verify\n")
 	case r.Conductor != "":
-		fmt.Fprintf(&b, "  7. conductor: its database is at %s (install conductor, then rerun with --with-conductor-state or copy it to\n", r.Conductor)
-		b.WriteString("     /var/lib/conductor/conductor.db owned by conductor). Without the TOTP key, users enroll 2FA again.\n")
+		fmt.Fprintf(&b, "  7. conductor: its database is at %s (install conductor, then copy it to /var/lib/conductor/conductor.db owned by\n", r.Conductor)
+		fmt.Fprintf(&b, "     conductor, and point [domain] preferred/dcs at %s.%s). Without the TOTP key, users enroll 2FA again.\n", strings.ToLower(r.ServerName), domain)
 	}
-	fmt.Fprintf(&b, "  8. Rebuild every other DC with a fresh host and `samba-tool domain join %s DC` (never restore a second copy).\n", domain)
+	fmt.Fprintf(&b, "  8. Rebuild every other DC with a fresh host and `samba-tool domain join %s DC` (never restore a second copy);\n", domain)
+	b.WriteString("     the old DC names are free again. Update whatever names a DC explicitly (clients normally find DCs through DNS).\n")
 	return b.String()
 }
