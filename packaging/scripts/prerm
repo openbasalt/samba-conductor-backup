@@ -1,0 +1,12 @@
+#!/bin/sh
+# prerm of conductor-backup: stop its units when the package is removed (not on
+# upgrade: postinst restarts the running ones with the new binaries).
+set -e
+
+UNITS="conductor-backup.timer conductor-backup.path conductor-backup-drill.timer conductor-backup.service conductor-backup-drill.service"
+
+if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+	deb-systemd-invoke stop $UNITS >/dev/null || true
+fi
+
+exit 0

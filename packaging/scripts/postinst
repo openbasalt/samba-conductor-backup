@@ -1,0 +1,56 @@
+#!/bin/sh
+# postinst of conductor-backup: the system user, directories and their
+# modes, and the systemd bookkeeping of dh_installsystemd --no-enable
+# --no-start --restart-after-upgrade. A fresh install never enables or
+# starts a unit (conductor-backup needs keys, recipients and destinations
+# first); an upgrade restarts only the units that are running and keeps the
+# administrator's enabled state.
+set -e
+
+ENABLE="conductor-backup.timer conductor-backup.path conductor-backup-drill.timer"
+RESTART=""
+
+# override OWNER GROUP MODE PATH: a dpkg-statoverride for a path the package
+# ships (dpkg would reset it on upgrade), unless the administrator set one.
+override() {
+	if ! dpkg-statoverride --list "$4" >/dev/null 2>&1; then
+		dpkg-statoverride --quiet --update --add "$1" "$2" "$3" "$4"
+	fi
+}
+
+# newdir OWNER GROUP MODE PATH: create a directory once; an existing one is
+# left exactly as it is.
+newdir() {
+	[ -d "$4" ] || install -d -o "$1" -g "$2" -m "$3" "$4"
+}
+
+case "$1" in
+configure | abort-upgrade | abort-deconfigure | abort-remove)
+	systemd-sysusers ${DPKG_ROOT:+--root="$DPKG_ROOT"} conductor-backup.conf
+
+	override root conductor-backup 0750 /etc/conductor-backup
+	override root conductor-backup 0640 /etc/conductor-backup/conductor-backup.toml
+	newdir root root 0700 /etc/conductor-backup/credentials
+	newdir conductor-backup conductor-backup 0700 /var/lib/conductor-backup
+
+	if command -v deb-systemd-helper >/dev/null 2>&1; then
+		for unit in $ENABLE; do
+			if deb-systemd-helper debian-installed "$unit"; then
+				deb-systemd-helper unmask "$unit" >/dev/null || true
+				if deb-systemd-helper --quiet was-enabled "$unit"; then
+					deb-systemd-helper enable "$unit" >/dev/null || true
+				fi
+			fi
+			deb-systemd-helper update-state "$unit" >/dev/null || true
+		done
+	fi
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ] && [ -n "$RESTART" ]; then
+			deb-systemd-invoke try-restart $RESTART >/dev/null || true
+		fi
+	fi
+	;;
+esac
+
+exit 0

@@ -1,0 +1,104 @@
+# nfpm configuration of the "conductor-backup" package. Built by
+# packaging/build.sh, which sets ARCH, DEB_VERSION, DEB_REVISION, BUILD
+# (staging directory) and SOURCE_DATE_EPOCH (every timestamp). Paths are
+# relative to the repository root.
+name: conductor-backup
+arch: ${ARCH}
+platform: linux
+version: ${DEB_VERSION}
+version_schema: none
+release: ${DEB_REVISION}
+section: admin
+priority: optional
+maintainer: Samba Conductor maintainers <samba-conductor@openbasalt.org>
+vendor: OpenBasalt
+homepage: https://github.com/openbasalt/samba-conductor-backup
+license: MIT
+description: |-
+  encrypted Samba AD backups, restore and restore drills
+  conductor-backup takes online backups of a Samba Active Directory domain
+  (through conductor-helper, with an account that holds only replication
+  rights), encrypts them with age to keys that never live on the domain
+  controller, uploads them to S3-compatible storage or a local directory
+  with signed manifests, applies a retention policy and sends alerts. On a
+  separate drill host it restores the newest backup into a network-less
+  sandbox and checks that the domain answers, proving the backups restore.
+  .
+  Nothing is started at installation (see
+  /usr/share/doc/conductor-backup/README.Debian).
+
+depends:
+  - systemd | systemd-standalone-sysusers | systemd-sysusers
+suggests:
+  - conductor
+  - samba-ad-dc
+  - iproute2
+
+contents:
+  - expand: true
+    src: ${BUILD}/bin/conductor-backup
+    dst: /usr/bin/conductor-backup
+    file_info: {mode: 0755}
+  - expand: true
+    src: ${BUILD}/systemd/conductor-backup.service
+    dst: /usr/lib/systemd/system/conductor-backup.service
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/systemd/conductor-backup.timer
+    dst: /usr/lib/systemd/system/conductor-backup.timer
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/systemd/conductor-backup.path
+    dst: /usr/lib/systemd/system/conductor-backup.path
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/systemd/conductor-backup-drill.service
+    dst: /usr/lib/systemd/system/conductor-backup-drill.service
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/systemd/conductor-backup-drill.timer
+    dst: /usr/lib/systemd/system/conductor-backup-drill.timer
+    file_info: {mode: 0644}
+  # Inactive on purpose: linked into /etc/systemd/system/conductor-helper.service.d/
+  # when backups are enabled on a DC (active by default it would keep
+  # conductor-helper from starting until the backup credential exists).
+  - expand: true
+    src: ${BUILD}/systemd/conductor-helper.service.d/conductor-backup.conf
+    dst: /usr/share/conductor-backup/systemd/conductor-helper-backup.conf
+    file_info: {mode: 0644}
+  - src: packaging/sysusers.conf
+    dst: /usr/lib/sysusers.d/conductor-backup.conf
+    file_info: {mode: 0644}
+  - src: conductor-backup.toml.example
+    dst: /etc/conductor-backup/conductor-backup.toml
+    type: config|noreplace
+    file_info: {mode: 0644}
+  - src: drill.toml.example
+    dst: /etc/conductor-backup/drill.toml
+    type: config|noreplace
+    file_info: {mode: 0644}
+  - src: recipients.txt.example
+    dst: /usr/share/doc/conductor-backup/examples/recipients.txt
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/man/conductor-backup.8.gz
+    dst: /usr/share/man/man8/conductor-backup.8.gz
+    file_info: {mode: 0644}
+  - src: packaging/copyright
+    dst: /usr/share/doc/conductor-backup/copyright
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/doc/conductor-backup/changelog.Debian.gz
+    dst: /usr/share/doc/conductor-backup/changelog.Debian.gz
+    file_info: {mode: 0644}
+  - src: packaging/README.Debian
+    dst: /usr/share/doc/conductor-backup/README.Debian
+    file_info: {mode: 0644}
+  - src: packaging/lintian-overrides
+    dst: /usr/share/lintian/overrides/conductor-backup
+    file_info: {mode: 0644}
+
+scripts:
+  postinstall: packaging/scripts/postinst
+  preremove: packaging/scripts/prerm
+  postremove: packaging/scripts/postrm

@@ -74,6 +74,57 @@ drills (requests are signed by the DC).
 
 Requires conductor and conductor-helper installed (`../conductor/docs/install.md`).
 
+### With the package (recommended)
+
+The project's APT repository is not published yet; until it is, install the
+`.deb` of a release directly (`apt install ./conductor-backup_<version>_amd64.deb`,
+after checking it against the release's signed `SHA256SUMS`). Once it is
+published, add it as conductor's install doc shows, then `apt install
+conductor-backup`. The package installs `/usr/bin/conductor-backup`, the DC
+units (service, hourly timer, request path) and the drill units in
+`/usr/lib/systemd/system`, the man page, the conffiles
+`/etc/conductor-backup/conductor-backup.toml` (root:conductor-backup 0640)
+and `drill.toml` (example values), and the helper drop-in, **inactive**, as
+`/usr/share/conductor-backup/systemd/conductor-helper-backup.conf`. It
+creates the `conductor-backup` user, `/etc/conductor-backup` (0750) with
+`credentials/` (root 0700) and `/var/lib/conductor-backup`. Nothing is
+enabled or started. Then, as root:
+
+```sh
+# The backup account and its rights: step 2 of the source install below.
+# Credentials (root 0600): backup-account, signing-key, s3 (step 3 below).
+# Recipients: /etc/conductor-backup/recipients.txt (step 4 below).
+editor /etc/conductor-backup/conductor-backup.toml        # upgrades keep your edits
+editor /etc/conductor/helper.toml                         # [backup] enabled = true, account, conductor_db
+install -d /etc/systemd/system/conductor-helper.service.d
+ln -s /usr/share/conductor-backup/systemd/conductor-helper-backup.conf \
+  /etc/systemd/system/conductor-helper.service.d/conductor-backup.conf
+systemctl daemon-reload
+systemctl restart conductor-helper
+systemctl enable --now conductor-backup.timer conductor-backup.path
+conductor-backup request backup --wait                   # first backup now
+```
+
+The drop-in is shipped inactive because it loads the `backup-account`
+credential: active by default it would keep conductor-helper from starting
+until that file exists. `conductor-backup.service` loads the `signing-key`
+and `s3` credentials; with only a local destination (no `s3`), name the
+credentials it uses in a drop-in instead:
+
+```sh
+install -d /etc/systemd/system/conductor-backup.service.d
+printf '[Service]\nLoadCredential=\nLoadCredential=signing-key:/etc/conductor-backup/credentials/signing-key\n' \
+  > /etc/systemd/system/conductor-backup.service.d/credentials.conf
+```
+
+Upgrades keep configuration, credentials and state (the timer and path
+keep their state; there is no long-running service to restart). `apt purge
+conductor-backup` deletes `/etc/conductor-backup` (signing key, S3 keys,
+drill identity), `/var/lib/conductor-backup` and the helper drop-in link;
+**backups are never deleted** (bucket or local destination).
+
+### From source
+
 ```sh
 # 1. Binary, user, directories.
 install -m 0755 conductor-backup /usr/local/bin/
@@ -139,7 +190,15 @@ own backups.
 
 A small VM or machine that is **not** a DC, with `samba-ad-dc` installed but
 its services disabled and masked, `iproute2`, no route to the DCs, read
-access to the bucket and write access to its `drills/` prefix:
+access to the bucket and write access to its `drills/` prefix.
+
+With the package: `apt install conductor-backup samba-ad-dc iproute2`, mask
+the Samba services, put the drill credentials in
+`/etc/conductor-backup/credentials/`, edit `/etc/conductor-backup/drill.toml`,
+then `systemctl enable --now conductor-backup-drill.timer`. (The package also
+creates the unused `conductor-backup` user there; drills run as root.)
+
+From source:
 
 ```sh
 install -m 0755 conductor-backup /usr/local/bin/
@@ -197,8 +256,10 @@ before risky local maintenance.
 ## Development
 
 ```sh
-make check   # gofmt, go vet, staticcheck, govulncheck, go test -race
-make build   # bin/conductor-backup (CGO off, static)
+make check     # gofmt, go vet, staticcheck, govulncheck, go test -race
+make build     # bin/conductor-backup (CGO off, static)
+make package   # dist/: .deb for amd64 and arm64, SBOMs (../planning/docs/packaging.md)
+make lintian
 ```
 
 Lab: `../planning/lab/backup-infra.sh`, `drill-up.sh`, `backup-install.sh`,

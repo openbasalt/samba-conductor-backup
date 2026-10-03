@@ -1,0 +1,29 @@
+conductor-backup for Debian and Ubuntu
+======================================
+
+Installing the package creates the "conductor-backup" system user,
+/etc/conductor-backup (root:conductor-backup 0750) with credentials/
+(root 0700), the conffiles conductor-backup.toml and drill.toml (example
+values) and /var/lib/conductor-backup. It does not enable or start anything.
+
+On a domain controller (conductor and conductor-helper installed):
+
+  1. The backup account, credentials (backup-account, signing-key, s3),
+     recipients.txt and conductor-backup.toml: see the README's
+     "Install on a domain controller".
+  2. Enable backups in /etc/conductor/helper.toml ([backup] enabled = true)
+     and link the helper drop-in shipped by this package:
+       sudo install -d /etc/systemd/system/conductor-helper.service.d
+       sudo ln -s /usr/share/conductor-backup/systemd/conductor-helper-backup.conf \
+         /etc/systemd/system/conductor-helper.service.d/conductor-backup.conf
+       sudo systemctl daemon-reload && sudo systemctl restart conductor-helper
+  3. sudo systemctl enable --now conductor-backup.timer conductor-backup.path
+
+On a drill host (never a DC): drill.toml, its credentials, then
+  sudo systemctl enable --now conductor-backup-drill.timer
+
+"apt purge conductor-backup" deletes /etc/conductor-backup (signing key, S3
+keys, drill identity) and /var/lib/conductor-backup; backups already in a
+bucket or a local destination are never deleted.
+
+Full guide: https://github.com/openbasalt/samba-conductor-backup/blob/main/README.md

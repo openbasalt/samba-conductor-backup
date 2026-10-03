@@ -1,0 +1,100 @@
+# Continuous integration of conductor-backup: the quality gates, then both packages
+# (amd64 and arm64, cross-compiled with CGO off) checked by Debian 13's
+# lintian. Actions are pinned by commit SHA. Release builds: release.yml.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The sibling modules are private and resolved through `replace ../<repo>`
+      # until they are published: a read-only token from the org's GitHub App
+      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      - name: Token for the sibling repositories
+        id: siblings
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLINGS_APP_PRIVATE_KEY }}
+          owner: openbasalt
+          repositories: samba-conductor-ad
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: conductor-backup
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openbasalt/samba-conductor-ad
+          path: ad
+          token: ${{ steps.siblings.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: conductor-backup/go.mod
+          cache-dependency-path: conductor-backup/go.sum
+      - name: Pinned gate tools
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: gofmt, vet, staticcheck, govulncheck, go test -race
+        working-directory: conductor-backup
+        run: make check
+
+  package:
+    needs: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The sibling modules are private and resolved through `replace ../<repo>`
+      # until they are published: a read-only token from the org's GitHub App
+      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      - name: Token for the sibling repositories
+        id: siblings
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLINGS_APP_PRIVATE_KEY }}
+          owner: openbasalt
+          repositories: samba-conductor-ad
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: conductor-backup
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openbasalt/samba-conductor-ad
+          path: ad
+          token: ${{ steps.siblings.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: conductor-backup/go.mod
+          cache-dependency-path: conductor-backup/go.sum
+      - name: Packages (amd64, arm64) and SBOMs
+        working-directory: conductor-backup
+        run: make package
+      - name: lintian (Debian 13)
+        working-directory: conductor-backup
+        run: make lintian
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conductor-backup-packages
+          path: conductor-backup/dist/
+          retention-days: 7

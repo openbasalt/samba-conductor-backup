@@ -1,0 +1,82 @@
+.TH CONDUCTOR-BACKUP 8 "2026-10-03" "Samba Conductor" "System Administration"
+.SH NAME
+conductor-backup \- encrypted Samba AD backups, restore and restore drills
+.SH SYNOPSIS
+.B conductor-backup
+.RB [ \-\-config
+.IR FILE ]
+.I command
+.RI [ args ]
+.SH DESCRIPTION
+.B conductor-backup
+takes online backups of a Samba Active Directory domain through
+.BR conductor-helper (8),
+encrypts them with age to recipients whose private keys are kept off the
+domain controller, uploads them with signed manifests, prunes by a retention
+policy and alerts on failures. On a separate drill host it restores the
+newest backup into a sandbox without network and checks it. The default
+configuration is
+.IR /etc/conductor-backup/conductor-backup.toml .
+.SH COMMANDS
+On a domain controller (user conductor-backup):
+.TP
+.B run [\-\-scheduled|\-\-now]
+Back up when due (timer) or now, upload, verify, prune, exchange drill
+requests and reports, alert.
+.TP
+.B request backup|drill [\-\-wait]
+Ask the service for a backup or a drill now.
+.TP
+.B check
+Evaluate and send alerts only (exit 1 if any is active).
+.TP
+.B status [\-\-json]
+Status as shown on conductor's Backups page.
+.TP
+.B list [\-\-destination N]
+Backups in a destination (signatures verified).
+.TP
+.B verify ID|latest
+Download and check the SHA-256 (no decryption).
+.TP
+.B prune [\-\-dry\-run]
+Apply the retention policy.
+.PP
+Anywhere with read access to the bucket (root, with the offline key):
+.TP
+.B restore ID|latest \-\-identity FILE \-\-target DIR \-\-newservername NAME
+Restore a backup with samba-tool domain backup restore.
+.PP
+On a drill host (root, never a domain controller):
+.TP
+.B drill [\-\-now] [\-\-backup ID]
+Run a requested (or forced) restore drill.
+.PP
+Keys:
+.TP
+.B keygen signing|age \-\-out FILE
+Create a signing key or an age identity.
+.TP
+.BI pubkey " FILE"
+Public key of a signing key.
+.SH FILES
+.TP
+.I /etc/conductor-backup/conductor-backup.toml
+Configuration on a domain controller.
+.TP
+.I /etc/conductor-backup/drill.toml
+Configuration on a drill host.
+.TP
+.I /etc/conductor-backup/recipients.txt
+age recipients (root-owned, writable by root only).
+.TP
+.I /etc/conductor-backup/credentials/
+Signing key, S3 and SMTP credentials, backup account password, drill
+identity, loaded by systemd.
+.TP
+.I /usr/share/conductor-backup/systemd/conductor-helper-backup.conf
+Drop-in for conductor-helper.service, linked when backups are enabled.
+.SH SEE ALSO
+.BR conductor (8),
+.BR conductor-helper (8),
+.BR age (1)

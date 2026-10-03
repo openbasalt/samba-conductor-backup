@@ -1,0 +1,260 @@
+# Release of conductor-backup on a tag vX.Y.Z (or vX.Y.Z-rc.N): the quality gates,
+# packages for amd64 and arm64 (cross-compiled, CGO off), an arm64 smoke run
+# under QEMU, an independent rebuild that must be byte-identical, SBOMs,
+# SHA256SUMS and its OpenPGP signature. Once the repository is public:
+# GitHub artifact attestations (build provenance, SBOM) and a Sigstore
+# bundle. A draft GitHub release only when the repository variable
+# PUBLISH_RELEASE is "true". Keys and settings the owner provides:
+# planning/docs/release-keys.md. Actions are pinned by commit SHA.
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The sibling modules are private and resolved through `replace ../<repo>`
+      # until they are published: a read-only token from the org's GitHub App
+      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      - name: Token for the sibling repositories
+        id: siblings
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLINGS_APP_PRIVATE_KEY }}
+          owner: openbasalt
+          repositories: samba-conductor-ad
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: conductor-backup
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openbasalt/samba-conductor-ad
+          path: ad
+          token: ${{ steps.siblings.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: conductor-backup/go.mod
+          cache-dependency-path: conductor-backup/go.sum
+      - name: Pinned gate tools
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: gofmt, vet, staticcheck, govulncheck, go test -race
+        working-directory: conductor-backup
+        run: make check
+
+  package:
+    needs: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The sibling modules are private and resolved through `replace ../<repo>`
+      # until they are published: a read-only token from the org's GitHub App
+      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      - name: Token for the sibling repositories
+        id: siblings
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLINGS_APP_PRIVATE_KEY }}
+          owner: openbasalt
+          repositories: samba-conductor-ad
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: conductor-backup
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openbasalt/samba-conductor-ad
+          path: ad
+          token: ${{ steps.siblings.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: conductor-backup/go.mod
+          cache-dependency-path: conductor-backup/go.sum
+      - name: Packages (amd64, arm64) and SBOMs
+        working-directory: conductor-backup
+        run: make package
+      - name: lintian (Debian 13)
+        working-directory: conductor-backup
+        run: make lintian
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - name: arm64 smoke (install and run under QEMU)
+        working-directory: conductor-backup
+        run: |
+          docker run --rm --platform linux/arm64 -v "$PWD/dist:/dist:ro" \
+            docker.io/library/debian:trixie@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c \
+            sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends /dist/*_arm64.deb >/dev/null &&
+              for b in $(dpkg -L $(dpkg-deb -f /dist/*_arm64.deb Package) | grep "^/usr/bin/"); do
+                case "$b" in */conductor-helper) "$b" -version ;; *) "$b" version ;; esac || exit 1
+              done'
+      - name: SHA256SUMS
+        working-directory: conductor-backup/dist
+        run: sha256sum -- *.deb *.cdx.json > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: conductor-backup/dist/
+          retention-days: 30
+
+  reproduce:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The sibling modules are private and resolved through `replace ../<repo>`
+      # until they are published: a read-only token from the org's GitHub App
+      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      - name: Token for the sibling repositories
+        id: siblings
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLINGS_APP_PRIVATE_KEY }}
+          owner: openbasalt
+          repositories: samba-conductor-ad
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: conductor-backup
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openbasalt/samba-conductor-ad
+          path: ad
+          token: ${{ steps.siblings.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: conductor-backup/go.mod
+          cache-dependency-path: conductor-backup/go.sum
+      - name: Rebuild
+        working-directory: conductor-backup
+        run: make package
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: release
+      - name: Same bytes as the release build
+        working-directory: conductor-backup/dist
+        run: sha256sum -c "$GITHUB_WORKSPACE/release/SHA256SUMS"
+
+  sign:
+    needs: reproduce
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Protected environment (tags only, required reviewer): holds the
+    # release signing subkey. Without the secret the job only records that
+    # the release is unsigned.
+    environment: release
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: release
+      - name: OpenPGP signature of SHA256SUMS
+        working-directory: release
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          SIGNING_PASSPHRASE: ${{ secrets.RELEASE_SIGNING_PASSPHRASE }}
+          SIGNING_FPR: ${{ vars.RELEASE_SIGNING_FPR }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::RELEASE_SIGNING_KEY is not set: SHA256SUMS is not signed"
+            exit 0
+          fi
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          printf '%s' "$SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+            --local-user "$SIGNING_FPR" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+          gpg --batch --verify SHA256SUMS.asc SHA256SUMS
+          rm -rf "$GNUPGHOME"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signed
+          path: release/
+          retention-days: 30
+
+  attest:
+    # Attestations and Sigstore publish the repository and workflow identity
+    # in public logs, and private repositories need GitHub Enterprise for
+    # attestations: only once the repository is public.
+    if: ${{ github.event.repository.private == false }}
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-signed
+          path: release
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*.deb
+      - name: One SBOM path per architecture
+        run: |
+          cp release/*_amd64.cdx.json "$RUNNER_TEMP/sbom-amd64.cdx.json"
+          cp release/*_arm64.cdx.json "$RUNNER_TEMP/sbom-arm64.cdx.json"
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: release/*_amd64.deb
+          sbom-path: ${{ runner.temp }}/sbom-amd64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: release/*_arm64.deb
+          sbom-path: ${{ runner.temp }}/sbom-arm64.cdx.json
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sigstore bundle of SHA256SUMS (keyless)
+        working-directory: release
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-attested
+          path: release/
+          retention-days: 30
+
+  draft-release:
+    if: ${{ vars.PUBLISH_RELEASE == 'true' }}
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-signed
+          path: release
+      - name: Draft GitHub release (published by a person)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "conductor-backup $TAG" --notes "Packages, SBOMs and signed checksums of conductor-backup $TAG." release/*

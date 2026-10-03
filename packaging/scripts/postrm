@@ -1,0 +1,43 @@
+#!/bin/sh
+# postrm of conductor-backup. Purge deletes the configuration, the credentials
+# (signing key, S3 keys, drill identity), the local state (spool, policy,
+# reports), the drop-ins of its units and the helper drop-in the install
+# docs link, and the bookkeeping.
+# Backups themselves are never deleted: neither the bucket nor a local
+# destination such as /var/backups/conductor-backup.
+# The system user is kept: files it owns may exist elsewhere (backups,
+# copies), and a reused UID would own them.
+set -e
+
+ENABLE="conductor-backup.timer conductor-backup.path conductor-backup-drill.timer"
+
+case "$1" in
+remove)
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+	fi
+	if command -v deb-systemd-helper >/dev/null 2>&1; then
+		deb-systemd-helper mask $ENABLE >/dev/null || true
+	fi
+	;;
+purge)
+	if command -v deb-systemd-helper >/dev/null 2>&1; then
+		deb-systemd-helper purge $ENABLE >/dev/null || true
+		deb-systemd-helper unmask $ENABLE >/dev/null || true
+	fi
+	for path in /etc/conductor-backup/conductor-backup.toml /etc/conductor-backup; do
+		if dpkg-statoverride --list "$path" >/dev/null 2>&1; then
+			dpkg-statoverride --remove "$path"
+		fi
+	done
+	rm -rf /etc/systemd/system/conductor-backup.timer.d /etc/systemd/system/conductor-backup.path.d /etc/systemd/system/conductor-backup-drill.timer.d /etc/systemd/system/conductor-backup.service.d /etc/systemd/system/conductor-backup-drill.service.d
+	rm -f /etc/systemd/system/conductor-helper.service.d/conductor-backup.conf
+	rmdir --ignore-fail-on-non-empty /etc/systemd/system/conductor-helper.service.d 2>/dev/null || true
+	rm -rf /etc/conductor-backup /var/lib/conductor-backup /var/lib/conductor-backup-drill
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+	fi
+	;;
+esac
+
+exit 0
