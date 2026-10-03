@@ -3,10 +3,10 @@
 Encrypted Samba Active Directory backups, restore, and automated restore
 drills, for Samba Conductor v2. Design: `../planning/docs/architecture.md`
 (§3, §6), phase spec `../planning/docs/p3-spec.md`, recovery runbook
-`../conductor/docs/restore.md`.
+<https://github.com/openbasalt/samba-conductor/blob/main/docs/restore.md>.
 
 Status: **P3** (2026-10-03), validated in the two-DC lab, including
-a full-forest restore exercise (`../conductor/docs/usage-p3.md`).
+a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/blob/main/docs/usage-p3.md>).
 
 ## What it does
 
@@ -72,7 +72,7 @@ drills (requests are signed by the DC).
 
 ## Install on a domain controller (Debian 13 / Ubuntu 26.04)
 
-Requires conductor and conductor-helper installed (`../conductor/docs/install.md`).
+Requires conductor and conductor-helper installed (<https://github.com/openbasalt/samba-conductor/blob/main/docs/install.md>).
 
 ### With the package (recommended)
 
