@@ -1,0 +1,8 @@
+# age recipients (public keys), one per line. Backups are encrypted to all
+# of them. Keep the matching private keys OFF the domain controllers:
+# operators' keys offline (password manager, hardware), the drill host's
+# key on the drill host only.
+# operator (offline):
+age1REPLACE...
+# drill host:
+age1REPLACE...

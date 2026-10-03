@@ -1,0 +1,13 @@
+# Every five minutes the drill host looks for drill requests (posted by the
+# DC per its policy or by an administrator) and runs one when asked; it also
+# alerts when the newest backup in the bucket is too old.
+[Unit]
+Description=Samba Conductor restore drill requests
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

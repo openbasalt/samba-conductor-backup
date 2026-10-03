@@ -1,0 +1,38 @@
+# conductor-backup on a drill host (/etc/conductor-backup/drill.toml).
+# A drill host is NOT a domain controller: it holds the drill age identity
+# (backups are also encrypted to it), reads the bucket, restores the newest
+# backup into a network-less sandbox and reports the result, signed.
+# Requirements: samba-ad-dc packages installed (services disabled),
+# iproute2, root.
+
+realm = "EXAMPLE.COM"
+# The DC's public signing key (`conductor-backup pubkey` on the DC):
+# manifests and drill requests must be signed by it.
+backup_public_keys = ["cbsig1:REPLACE-WITH-THE-DC-PUBLIC-KEY"]
+
+[[destination]]
+name = "s3"
+type = "s3"
+endpoint = "https://s3.example.com"
+region = "us-east-1"
+bucket = "example-ad-backups"
+path_style = true
+credentials = "s3"      # read objects, write drills/ (reports)
+
+[drill]
+identity = "drill-identity"             # credential: AGE-SECRET-KEY-…
+signing_key = "drill-signing-key"       # credential: signs the reports
+probe_user = "svc-drill-probe"          # a plain domain user (no rights)
+probe_password = "drill-probe-password" # credential
+# work_dir = "/var/lib/conductor-backup-drill"   # on disk (sysvol ACLs need xattrs)
+# server_name = "DRILL"
+# destination = "s3"
+# Alert when the newest backup in the bucket is older than this (an
+# off-DC watchdog; 0 = off).
+max_backup_age_hours = 30
+# timeout_minutes = 30
+
+[alert]
+email_to = ["ops@example.com"]
+email_from = "conductor-backup@drill.example.com"
+smtp_server = "mail.example.com:587"

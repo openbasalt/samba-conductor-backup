@@ -1,0 +1,12 @@
+# "Back up now" / "Run drill now" from conductor: conductor-helper writes a
+# request file; this starts conductor-backup right away (no privilege
+# needed to start a unit).
+[Unit]
+Description=Samba Conductor backup requests
+
+[Path]
+PathChanged=/var/lib/conductor-backup/requests
+Unit=conductor-backup.service
+
+[Install]
+WantedBy=paths.target

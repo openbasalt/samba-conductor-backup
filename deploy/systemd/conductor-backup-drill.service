@@ -1,0 +1,31 @@
+# Restore drills on a drill host (NEVER on a domain controller: the drill
+# identity can decrypt backups). Runs as root: the sandbox needs network,
+# mount and PID namespaces and samba-tool restore needs root. Every drill
+# restores into a fresh, network-less sandbox and shreds its plaintext.
+[Unit]
+Description=Samba Conductor restore drill
+Documentation=https://github.com/samba-conductor/conductor-backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/conductor-backup drill --config /etc/conductor-backup/drill.toml
+TimeoutStartSec=1h
+LoadCredential=drill-identity:/etc/conductor-backup/credentials/drill-identity
+LoadCredential=drill-signing-key:/etc/conductor-backup/credentials/drill-signing-key
+LoadCredential=drill-probe-password:/etc/conductor-backup/credentials/drill-probe-password
+LoadCredential=s3:/etc/conductor-backup/credentials/s3
+StateDirectory=conductor-backup-drill
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native

@@ -1,0 +1,13 @@
+# Hourly: conductor-backup decides whether a backup is due (policy schedule,
+# retried every hour until one succeeds), prunes once a day, collects drill
+# reports and re-checks alerts.
+[Unit]
+Description=Samba Conductor backup schedule
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target
