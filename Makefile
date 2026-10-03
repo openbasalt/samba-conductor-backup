@@ -1,6 +1,9 @@
-# Quality gates and builds for conductor-backup. GOWORK=off: the module is
-# checked on its own (go.mod points at ../ad with a replace directive).
-export GOWORK := off
+# Quality gates and builds for conductor-backup.
+# GOWORK=off by default: the module is checked on its own, against the
+# versions go.mod pins (what CI and release builds use), not through a
+# family go.work; `make check GOWORK=$PWD/../go.work` checks it against
+# local copies of the sibling modules instead.
+export GOWORK ?= off
 GOBIN := $(shell go env GOPATH)/bin
 STATICCHECK := $(GOBIN)/staticcheck
 GOVULNCHECK := $(GOBIN)/govulncheck

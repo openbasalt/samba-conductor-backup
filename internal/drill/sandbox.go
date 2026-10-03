@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/samba-conductor/ad"
-	"github.com/samba-conductor/ad/helper"
-	"github.com/samba-conductor/ad/sambatool"
+	ad "github.com/openbasalt/samba-conductor-ad"
+	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-ad/sambatool"
 )
 
 // The sandbox is a child process of `conductor-backup drill` started in new

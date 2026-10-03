@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOPRIVATE: github.com/openbasalt/*
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -20,9 +23,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      # The sibling modules are private and resolved through `replace ../<repo>`
-      # until they are published: a read-only token from the org's GitHub App
-      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      # The sibling modules (github.com/openbasalt/samba-conductor-*) are
+      # private until the repositories are opened: the go command fetches the
+      # versions go.mod pins straight from GitHub (GOPRIVATE, set for the workflow) with a
+      # read-only token from the org's GitHub App (planning/docs/packaging.md,
+      # "CI access to the sibling repositories"). When the repositories are
+      # public, this step, the git credentials step and GOPRIVATE go away.
       - name: Token for the sibling repositories
         id: siblings
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -37,12 +43,10 @@ jobs:
           path: conductor-backup
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openbasalt/samba-conductor-ad
-          path: ad
-          token: ${{ steps.siblings.outputs.token }}
-          persist-credentials: false
+      - name: Git credentials for the sibling modules (read-only, this job only)
+        env:
+          TOKEN: ${{ steps.siblings.outputs.token }}
+        run: git config --global url."https://x-access-token:${TOKEN}@github.com/openbasalt/".insteadOf "https://github.com/openbasalt/"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: conductor-backup/go.mod
@@ -60,9 +64,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      # The sibling modules are private and resolved through `replace ../<repo>`
-      # until they are published: a read-only token from the org's GitHub App
-      # (planning/docs/packaging.md, "CI access to the sibling repositories").
+      # The sibling modules (github.com/openbasalt/samba-conductor-*) are
+      # private until the repositories are opened: the go command fetches the
+      # versions go.mod pins straight from GitHub (GOPRIVATE, set for the workflow) with a
+      # read-only token from the org's GitHub App (planning/docs/packaging.md,
+      # "CI access to the sibling repositories"). When the repositories are
+      # public, this step, the git credentials step and GOPRIVATE go away.
       - name: Token for the sibling repositories
         id: siblings
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -77,12 +84,10 @@ jobs:
           path: conductor-backup
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openbasalt/samba-conductor-ad
-          path: ad
-          token: ${{ steps.siblings.outputs.token }}
-          persist-credentials: false
+      - name: Git credentials for the sibling modules (read-only, this job only)
+        env:
+          TOKEN: ${{ steps.siblings.outputs.token }}
+        run: git config --global url."https://x-access-token:${TOKEN}@github.com/openbasalt/".insteadOf "https://github.com/openbasalt/"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: conductor-backup/go.mod

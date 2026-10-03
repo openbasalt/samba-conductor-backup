@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/samba-conductor/ad/helper"
+	"github.com/openbasalt/samba-conductor-ad/helper"
 )
 
 // build writes an archive the way conductor-helper does.

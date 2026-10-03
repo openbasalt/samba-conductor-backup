@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/samba-conductor/ad/helper"
+	"github.com/openbasalt/samba-conductor-ad/helper"
 )
 
 // Formats.

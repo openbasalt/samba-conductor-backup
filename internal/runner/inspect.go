@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samba-conductor/conductor-backup/internal/config"
-	"github.com/samba-conductor/conductor-backup/internal/dest"
-	"github.com/samba-conductor/conductor-backup/internal/manifest"
-	"github.com/samba-conductor/conductor-backup/internal/sign"
+	"github.com/openbasalt/samba-conductor-backup/internal/config"
+	"github.com/openbasalt/samba-conductor-backup/internal/dest"
+	"github.com/openbasalt/samba-conductor-backup/internal/manifest"
+	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
 // Listed is one backup as found in a destination.

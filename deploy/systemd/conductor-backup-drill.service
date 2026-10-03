@@ -4,7 +4,7 @@
 # restores into a fresh, network-less sandbox and shreds its plaintext.
 [Unit]
 Description=Samba Conductor restore drill
-Documentation=https://github.com/samba-conductor/conductor-backup
+Documentation=https://github.com/openbasalt/samba-conductor-backup
 After=network-online.target
 Wants=network-online.target
 

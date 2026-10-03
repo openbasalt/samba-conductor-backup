@@ -5,6 +5,9 @@
 #
 #   packaging/build.sh [amd64] [arm64]      (default: both)
 #   VERSION=1.2.3 packaging/build.sh        (override the version from git)
+#   PACKAGE_GOWORK=../go.work packaging/build.sh
+#                                           (lab builds: the sibling modules from
+#                                           a Go workspace instead of go.mod's pins)
 #
 # Reproducible: the same commit, Go toolchain and tool versions give the same
 # bytes (-trimpath, empty build ID, SOURCE_DATE_EPOCH = commit time for every
@@ -19,7 +22,11 @@ CYCLONEDX_GOMOD_VERSION="v1.12.0"
 # shellcheck source=/dev/null
 . packaging/package.conf # PACKAGES (name=nfpm yaml) and BINARIES (package=binaries)
 
-export GOWORK=off CGO_ENABLED=0 GOOS=linux
+# Release builds use the sibling module versions go.mod pins (GOWORK=off);
+# a workspace is for lab builds of unpushed sibling changes only.
+export GOWORK="${PACKAGE_GOWORK:-off}" CGO_ENABLED=0 GOOS=linux
+local_family=()
+if [ "$GOWORK" != off ]; then local_family=(--local-family); fi
 # nfpm and cyclonedx-gomod at pinned versions, built for the build host
 # (not for the target architecture) into build/tools.
 TOOLS="$PWD/build/tools"
@@ -127,7 +134,7 @@ for arch in "${ARCHES[@]}"; do
       done
     done
     python3 packaging/sbom-merge.py --name "$pkg" --version "$VERSION_UPSTREAM-$REVISION" \
-      --arch "$arch" --timestamp "$MTIME" --out "${deb%.deb}.cdx.json" "${sboms[@]}"
+      --arch "$arch" --timestamp "$MTIME" --out "${deb%.deb}.cdx.json" "${local_family[@]}" "${sboms[@]}"
     printf '%s\n' "$deb" "${deb%.deb}.cdx.json"
   done
 done

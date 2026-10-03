@@ -25,9 +25,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samba-conductor/ad/helper"
-	"github.com/samba-conductor/conductor-backup/internal/config"
-	"github.com/samba-conductor/conductor-backup/internal/s3"
+	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-backup/internal/config"
+	"github.com/openbasalt/samba-conductor-backup/internal/s3"
 )
 
 // Object is a stored object (key relative to the destination root).

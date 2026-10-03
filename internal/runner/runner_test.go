@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samba-conductor/ad/helper"
-	"github.com/samba-conductor/conductor-backup/internal/alert"
-	"github.com/samba-conductor/conductor-backup/internal/config"
-	"github.com/samba-conductor/conductor-backup/internal/dest"
-	"github.com/samba-conductor/conductor-backup/internal/manifest"
-	"github.com/samba-conductor/conductor-backup/internal/sign"
-	"github.com/samba-conductor/conductor-backup/internal/state"
+	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-backup/internal/alert"
+	"github.com/openbasalt/samba-conductor-backup/internal/config"
+	"github.com/openbasalt/samba-conductor-backup/internal/dest"
+	"github.com/openbasalt/samba-conductor-backup/internal/manifest"
+	"github.com/openbasalt/samba-conductor-backup/internal/sign"
+	"github.com/openbasalt/samba-conductor-backup/internal/state"
 )
 
 // fakeHelper writes a ciphertext-like file in the spool, like the helper.

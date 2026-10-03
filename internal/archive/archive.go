@@ -17,8 +17,8 @@ import (
 	"strings"
 
 	"filippo.io/age"
-	"github.com/samba-conductor/ad/helper"
-	"github.com/samba-conductor/conductor-backup/internal/sign"
+	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
 // LoadIdentities reads an age identity file (AGE-SECRET-KEY-… lines). The

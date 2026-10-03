@@ -5,7 +5,7 @@ drills, for Samba Conductor v2. Design: `../planning/docs/architecture.md`
 (§3, §6), phase spec `../planning/docs/p3-spec.md`, recovery runbook
 `../conductor/docs/restore.md`.
 
-Status: **P3** (2026-10-03), validated in the two-DC server-home lab, including
+Status: **P3** (2026-10-03), validated in the two-DC lab, including
 a full-forest restore exercise (`../conductor/docs/usage-p3.md`).
 
 ## What it does

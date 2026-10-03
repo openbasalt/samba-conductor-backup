@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/samba-conductor/ad/helper"
+	"github.com/openbasalt/samba-conductor-ad/helper"
 )
 
 // Dir is a state directory.

@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/samba-conductor/ad/helper"
-	"github.com/samba-conductor/ad/sambatool"
-	"github.com/samba-conductor/conductor-backup/internal/archive"
-	"github.com/samba-conductor/conductor-backup/internal/dest"
-	"github.com/samba-conductor/conductor-backup/internal/runner"
-	"github.com/samba-conductor/conductor-backup/internal/sign"
+	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-ad/sambatool"
+	"github.com/openbasalt/samba-conductor-backup/internal/archive"
+	"github.com/openbasalt/samba-conductor-backup/internal/dest"
+	"github.com/openbasalt/samba-conductor-backup/internal/runner"
+	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
 // Options of a restore.

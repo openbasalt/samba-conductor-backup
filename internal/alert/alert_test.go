@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samba-conductor/conductor-backup/internal/config"
+	"github.com/openbasalt/samba-conductor-backup/internal/config"
 )
 
 // fakeSMTP accepts one message without TLS (loopback) and records it.

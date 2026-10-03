@@ -11,8 +11,8 @@ import argparse
 import json
 import uuid
 
-# Modules of the Samba Conductor family (local replace directives).
-FAMILY = "github.com/samba-conductor/"
+# Modules of the Samba Conductor family.
+FAMILY = "github.com/openbasalt/samba-conductor"
 
 
 def main():
@@ -22,6 +22,8 @@ def main():
     ap.add_argument("--arch", required=True)
     ap.add_argument("--timestamp", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--local-family", action="store_true",
+                    help="the family modules came from a Go workspace (lab build)")
     ap.add_argument("inputs", nargs="+")
     args = ap.parse_args()
 
@@ -50,10 +52,11 @@ def main():
             components.setdefault(app["bom-ref"], app)
             binaries.append(app["bom-ref"])
         for c in doc.get("components", []):
-            if c.get("name", "").startswith(FAMILY):
-                # A sibling resolved through `replace ../<repo>`: its hash is
+            if args.local_family and c.get("name", "").startswith(FAMILY):
+                # A sibling resolved through a Go workspace: its hash is
                 # computed over a working directory (build output included),
-                # so it is not reproducible; the version names the commit.
+                # so it is not reproducible. Release builds use the pinned
+                # versions, whose hashes come from the module cache.
                 c.pop("hashes", None)
             components.setdefault(c["bom-ref"], c)
         for d in doc.get("dependencies", []):

@@ -23,8 +23,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/samba-conductor/ad/helper"
-	"github.com/samba-conductor/conductor-backup/internal/sign"
+	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
 // DefaultPath is where the configuration lives.

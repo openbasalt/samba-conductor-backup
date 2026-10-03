@@ -6,7 +6,7 @@
 # conductor-backup.path (a "back up now" / "run drill now" request).
 [Unit]
 Description=Samba Conductor encrypted domain backup
-Documentation=https://github.com/samba-conductor/conductor-backup
+Documentation=https://github.com/openbasalt/samba-conductor-backup
 After=network-online.target conductor-helper.service
 Wants=network-online.target
 Requires=conductor-helper.service
