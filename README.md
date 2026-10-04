@@ -1,55 +1,55 @@
 # conductor-backup
 
 Encrypted Samba Active Directory backups, restore, and automated restore
-drills, for Samba Conductor v2. Design: `../planning/docs/architecture.md`
-(§3, §6), phase spec `../planning/docs/p3-spec.md`, recovery runbook
+drills, for Samba Conductor v2. Design: [docs/design.md](docs/design.md) and
+the family's [architecture.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/architecture.md), recovery runbook
 <https://github.com/openbasalt/samba-conductor/blob/main/docs/restore.md>.
 
-Status: **P3** (2026-10-03), validated in the two-DC lab, including
+Status: pre-release, no tagged version yet. Validated in the two-DC lab, including
 a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/blob/main/docs/usage-p3.md>).
 
 ## What it does
 
-- **Online backups** with `samba-tool domain backup online`: no downtime,
+- Online backups with `samba-tool domain backup online`: no downtime,
   every partition, the domain's secrets and SYSVOL (with its NT ACLs).
-  `conductor-helper` (root) runs it over loopback with a **dedicated account
-  that holds only the three replication rights** (not an administrator); the
+  `conductor-helper` (root) runs it over loopback with a dedicated account
+  that holds only the three replication rights (not an administrator); the
   password is a systemd credential of the helper and never on a command line.
-- **Everything a full recovery needs** in one archive: the samba-tool
+- Everything a full recovery needs in one archive: the samba-tool
   backup, conductor's SQLite state (audit log, settings, 2FA secrets still
   sealed; sessions removed), `smb.conf`, `krb5.conf`, the conductor,
   helper and backup configurations (no secrets in them), the DC's TLS files,
   versions (Samba, OS, functional levels, components).
-- **Encrypted before it is written anywhere**: the helper streams the
+- Encrypted before it is written anywhere: the helper streams the
   archive through [age](https://age-encryption.org) (filippo.io/age, X25519)
   to the recipients listed in a root-owned file. The private keys are
-  **never on a DC**: the operators keep theirs offline, the drill host keeps
+  never on a DC: the operators keep theirs offline, the drill host keeps
   its own. A compromised DC cannot read old backups. The plaintext exists
   only in the helper's private `/tmp` (tmpfs on Debian 13) and is
   overwritten and removed as soon as the archive is built.
-- **Destinations**: local directories and S3-compatible object storage
-  (MinIO, AWS S3, OCI Object Storage, …): `domain/<realm>/<id>.tar.age` plus a
-  **signed manifest** `<id>.json` (sizes, SHA-256 of the ciphertext,
+- Destinations: local directories and S3-compatible object storage
+  (MinIO, AWS S3, OCI Object Storage and others): `domain/<realm>/<id>.tar.age` plus a
+  signed manifest `<id>.json` (sizes, SHA-256 of the ciphertext,
   versions, recipients' fingerprints). Uploads sign the payload's SHA-256, so
   the server rejects a corrupted body; every copy is read back and its
   SHA-256 checked. Optional S3 object lock (GOVERNANCE/COMPLIANCE).
-- **Schedule and retention** (editable by administrators in conductor's
-  Backups page, with re-authentication): daily at a UTC time or every 1-12
-  hours, retried every hour until one succeeds; keep N daily, M weekly, K
+- Schedule and retention (editable by administrators in conductor's
+  Backups page, with re-authentication): daily at a UTC time or every 1, 2, 3, 4, 6, 8,
+  12 or 24 hours, retried every hour until one succeeds; keep N daily, M weekly, K
   monthly; nothing younger than 24 h and never the last good backup is
   deleted; a backup whose manifest does not verify (e.g. signed with a
   previous key of the DC) is reported and never deleted.
-- **Alerts**: e-mail (STARTTLS/TLS) and an optional signed webhook when a
+- Alerts: e-mail (STARTTLS/TLS) and an optional signed webhook when a
   backup fails or a destination misses one, when the last good backup is
   older than the policy, when a drill fails or is overdue; conductor's
   dashboard shows a banner, including when conductor-backup itself stopped
   running.
-- **Restore** (`restore`): a real AD restore with `samba-tool domain backup
+- Restore (`restore`): a real AD restore with `samba-tool domain backup
   restore` (original SIDs and GUIDs, FSMO roles seized, old DCs removed,
   krbtgt renewed), after checking the download against the signed manifest,
   and the exact next steps.
-- **Restore drills** (`drill`, on a drill host, never a DC): the newest backup
-  is restored into a **sandbox with no network** (new network, mount, PID,
+- Restore drills (`drill`, on a drill host, never a DC): the newest backup
+  is restored into a sandbox with no network (new network, mount, PID,
   UTS and IPC namespaces; loopback and a dummy interface only), started,
   and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
   probe account works, the user count matches the source, sample SIDs are
@@ -86,7 +86,7 @@ conductor-backup`. The package installs `/usr/bin/conductor-backup`, the DC
 units (service, hourly timer, request path) and the drill units in
 `/usr/lib/systemd/system`, the man page, the conffiles
 `/etc/conductor-backup/conductor-backup.toml` (root:conductor-backup 0640)
-and `drill.toml` (example values), and the helper drop-in, **inactive**, as
+and `drill.toml` (example values), and the helper drop-in, inactive, as
 `/usr/share/conductor-backup/systemd/conductor-helper-backup.conf`. It
 creates the `conductor-backup` user, `/etc/conductor-backup` (0750) with
 `credentials/` (root 0700) and `/var/lib/conductor-backup`. Nothing is
@@ -123,7 +123,7 @@ Upgrades keep configuration, credentials and state (the timer and path
 keep their state; there is no long-running service to restart). `apt purge
 conductor-backup` deletes `/etc/conductor-backup` (signing key, S3 keys,
 drill identity), `/var/lib/conductor-backup` and the helper drop-in link;
-**backups are never deleted** (bucket or local destination).
+backups are never deleted (bucket or local destination).
 
 ### From source
 
@@ -190,7 +190,7 @@ own backups.
 
 ## Install a drill host
 
-A small VM or machine that is **not** a DC, with `samba-ad-dc` installed but
+A small VM or machine that is not a DC, with `samba-ad-dc` installed but
 its services disabled and masked, `iproute2`, no route to the DCs, read
 access to the bucket and write access to its `drills/` prefix.
 
@@ -260,11 +260,11 @@ before risky local maintenance.
 ```sh
 make check     # gofmt, go vet, staticcheck, govulncheck, go test -race
 make build     # bin/conductor-backup (CGO off, static)
-make package   # dist/: .deb for amd64 and arm64, SBOMs (../planning/docs/packaging.md)
+make package   # dist/: .deb for amd64 and arm64, SBOMs (https://github.com/openbasalt/samba-conductor-docs/blob/main/packaging.md)
 make lintian
 ```
 
-Lab: `../planning/lab/backup-infra.sh`, `drill-up.sh`, `backup-install.sh`,
-`p3-snapshot.sh`, `restore-exercise.sh`; see `../planning/docs/lab.md`.
+Lab: `lab/backup-infra.sh`, `drill-up.sh`, `backup-install.sh`,
+`p3-snapshot.sh`, `restore-exercise.sh`; see [testing.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md).
 
 License: Apache-2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)).

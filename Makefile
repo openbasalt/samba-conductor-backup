@@ -40,7 +40,7 @@ tools:
 # Debian and RPM packages, the SELinux policy package and their SBOMs in
 # dist/ (amd64/x86_64 and arm64/aarch64 by default; version from the git tag,
 # VERSION= overrides; FORMATS=deb or rpm builds one format). Layout and
-# release process: ../planning/docs/packaging.md.
+# release process: https://github.com/openbasalt/samba-conductor-docs/blob/main/packaging.md.
 ARCHES ?= amd64 arm64
 FORMATS ?= deb rpm
 package:

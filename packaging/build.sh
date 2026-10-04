@@ -43,7 +43,7 @@ install_tool() {
   mv "$TOOLS/$name" "$TOOLS/$name.$3"
 }
 # NFPM / CYCLONEDX_GOMOD may point at the same versions already installed
-# (the release builder image, planning/release/Dockerfile).
+# (the release builder image).
 if [ -z "${NFPM:-}" ]; then
   install_tool nfpm github.com/goreleaser/nfpm/v2/cmd/nfpm "$NFPM_VERSION"
   NFPM="$TOOLS/nfpm.$NFPM_VERSION"
@@ -222,7 +222,7 @@ if want rpm && [ "${#SELINUX[@]}" -gt 0 ]; then
   sel="build/selinux"
   # Built here when missing; "make package" always rebuilds it first (the
   # release builder image has no container engine: the modules are built
-  # before entering it, planning/release/build-all.sh).
+  # before entering it).
   [ -s "$sel/policy-version" ] || packaging/selinux/build.sh
   SELINUX_POLICY_VERSION="$(cat "$sel/policy-version")"
   # The scriptlets name the modules (every .te and .cil in packaging/selinux).

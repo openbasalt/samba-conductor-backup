@@ -2,3 +2,12 @@ Samba Conductor: conductor-backup
 Copyright 2026 Edimar Cardoso and the Samba Conductor contributors.
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The SELinux policy package (<package>-selinux, RPM only) is the exception.
+Its sources in packaging/selinux are Apache-2.0, but the compiled policy
+modules contain expansions of the SELinux reference policy macros
+(selinux-policy-devel, GPL-2.0-or-later), so that package is distributed
+under "Apache-2.0 AND GPL-2.0-or-later" and ships the reference policy's
+license text. Its corresponding source is this repository at the release
+commit plus the Fedora selinux-policy source package of the version named
+in its THIRD-PARTY-LICENSES file. See packaging/selinux/README.

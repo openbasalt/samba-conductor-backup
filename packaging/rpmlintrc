@@ -7,7 +7,7 @@
 addFilter(r"statically-linked-binary /usr/bin/conductor-backup")
 # Not position independent: the Go linker's default executable mode, the
 # same binary as the .deb (building with -buildmode=pie is an open decision,
-# planning/docs/packaging.md).
+# https://github.com/openbasalt/samba-conductor-docs/blob/main/packaging.md).
 addFilter(r"position-independent-executable-suggested /usr/bin/conductor-backup")
 # The "conductor-backup" system user and group come from the package's own
 # sysusers.d entry (created in %pre); Fedora's registry of standard users

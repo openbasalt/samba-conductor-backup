@@ -48,8 +48,9 @@ before trusting it:
 - primary key `3601 7348 42BD 4E48 2D19  DE4A E4EE D5EC A395 B302`
 - packages signing subkey `3024 61D2 6520 E077 D07F  FCA9 AA27 C62C 36CC FC4B`
 
-How to verify a download: `planning/docs/release-keys.md` in
-[samba-conductor-planning](https://github.com/openbasalt/samba-conductor-planning).
+How to verify a download:
+[verifying-releases.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/verifying-releases.md)
+in samba-conductor-docs.
 
 ## Components
 

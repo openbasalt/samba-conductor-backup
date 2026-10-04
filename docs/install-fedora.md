@@ -1,10 +1,11 @@
 # Installing conductor-backup on Basalt OS / Fedora
 
-conductor-backup on a **Basalt OS** (Fedora 44 based, SELinux enforcing) or
-**Fedora 44** domain controller, from the RPM packages. The configuration
+conductor-backup on a Basalt OS (Fedora 44 based, SELinux enforcing) or
+Fedora 44 domain controller, from the RPM packages. The configuration
 is the one the README describes ("Install on a domain controller"); this
 page lists what differs. The Basalt OS package lab
-(`../planning/lab/basaltlab/` in the planning repository) runs it with
+(see
+[testing.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/testing.md)) runs it with
 SELinux enforcing: backups through conductor-helper to S3-compatible
 storage (HTTPS) and to a local directory, verified after upload and again
 with `conductor-backup verify`.
@@ -45,7 +46,7 @@ conductor-backup.path`.
   /srv/backups`. An S3 endpoint on another port: `sudo semanage port -a -t
   http_port_t -p tcp <port>`.
 - Restore drills (a separate drill host, never a DC) run in
-  `conductor_backup_drill_t`, an **unconfined** domain set by the unit
+  `conductor_backup_drill_t`, an unconfined domain set by the unit
   drop-in the policy package installs
   (`/usr/lib/systemd/system/conductor-backup-drill.service.d/selinux.conf`):
   the drill builds its own namespaces and mounts and runs `samba-tool

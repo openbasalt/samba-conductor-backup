@@ -33,3 +33,16 @@ Troubleshooting:
 
   ausearch -m AVC,USER_AVC -ts recent -c conductor-backu
   semanage permissive -a conductor_backup_t     (and -d to revert)
+
+License
+-------
+
+The policy sources here (.te, .fc, .if, .cil) are Apache-2.0, like the
+rest of the repository. The compiled modules expand macros and interfaces
+of the SELinux reference policy shipped by selinux-policy-devel, which is
+GPL-2.0-or-later, so the binary package is licensed "Apache-2.0 AND
+GPL-2.0-or-later" and carries the reference policy's COPYING in
+/usr/share/licenses/<package>/THIRD-PARTY-LICENSES. Apache-2.0 alone is
+not possible for the compiled modules. The corresponding source is this
+repository at the release commit and the Fedora selinux-policy source
+package of the version the modules were compiled against.

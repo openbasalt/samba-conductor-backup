@@ -27,7 +27,7 @@ jobs:
       # The sibling modules (github.com/openbasalt/samba-conductor-*) are
       # private until the repositories are opened: the go command fetches the
       # versions go.mod pins straight from GitHub (GOPRIVATE, set for the workflow) with a
-      # read-only token from the org's GitHub App (planning/docs/packaging.md,
+      # read-only token from the org's GitHub App (https://github.com/openbasalt/samba-conductor-docs/blob/main/packaging.md,
       # "CI access to the sibling repositories"). When the repositories are
       # public, this step, the git credentials step and GOPRIVATE go away.
       - name: Token for the sibling repositories
@@ -68,7 +68,7 @@ jobs:
       # The sibling modules (github.com/openbasalt/samba-conductor-*) are
       # private until the repositories are opened: the go command fetches the
       # versions go.mod pins straight from GitHub (GOPRIVATE, set for the workflow) with a
-      # read-only token from the org's GitHub App (planning/docs/packaging.md,
+      # read-only token from the org's GitHub App (https://github.com/openbasalt/samba-conductor-docs/blob/main/packaging.md,
       # "CI access to the sibling repositories"). When the repositories are
       # public, this step, the git credentials step and GOPRIVATE go away.
       - name: Token for the sibling repositories
