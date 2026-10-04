@@ -54,8 +54,9 @@ overrides:
     depends:
       - systemd
       # The SELinux policy wherever the targeted policy is installed
-      # (Fedora, Basalt OS): installed first, so the files get their labels.
-      - (conductor-backup-selinux if selinux-policy-targeted)
+      # (Fedora, Basalt OS): installed first, so the files get their labels;
+      # the same version, so an upgrade of the package upgrades its policy.
+      - (conductor-backup-selinux = ${PKG_VERSION}-${PKG_REVISION} if selinux-policy-targeted)
     suggests:
       - conductor
       - samba-dc

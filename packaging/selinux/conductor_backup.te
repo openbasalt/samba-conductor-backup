@@ -114,6 +114,11 @@ corenet_tcp_connect_smtp_port(conductor_backup_t)
 
 # conductor-backup.path watches the requests directory.
 allow init_t conductor_backup_var_lib_t:dir { getattr search read watch };
+# systemd creates the StateDirectory= subdirectories (spool, requests) with
+# the unit's owner and mode (the package owns only /var/lib/conductor-backup),
+# and the drill unit's /var/lib/conductor-backup-drill on a drill host.
+manage_dirs_pattern(init_t, conductor_backup_var_lib_t, conductor_backup_var_lib_t)
+manage_dirs_pattern(init_t, conductor_backup_drill_var_lib_t, conductor_backup_drill_var_lib_t)
 
 ########################################
 #
@@ -155,6 +160,13 @@ gen_require(`
 ')
 list_dirs_pattern(init_t, conductor_backup_cred_t, conductor_backup_cred_t)
 read_files_pattern(init_t, conductor_backup_cred_t, conductor_backup_cred_t)
+
+# systemd removes the unit's private /tmp (PrivateTmp=) when the service
+# stops, with whatever the service left in it.
+list_dirs_pattern(init_t, conductor_backup_tmp_t, conductor_backup_tmp_t)
+delete_dirs_pattern(init_t, conductor_backup_tmp_t, conductor_backup_tmp_t)
+delete_files_pattern(init_t, conductor_backup_tmp_t, conductor_backup_tmp_t)
+delete_sock_files_pattern(init_t, conductor_backup_tmp_t, conductor_backup_tmp_t)
 
 ########################################
 #

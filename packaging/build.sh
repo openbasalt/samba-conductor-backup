@@ -228,9 +228,13 @@ if want rpm && [ "${#SELINUX[@]}" -gt 0 ]; then
   # The scriptlets name the modules (every .te and .cil in packaging/selinux).
   modules="$(find packaging/selinux -maxdepth 1 \( -name '*.te' -o -name '*.cil' \) -printf '%f\n' |
     sed 's/\.[a-z]*$//' | LC_ALL=C sort -u | tr '\n' ' ')"
+  # And the domains they declare (postun drops an administrator's
+  # "semanage permissive" entry for them, which would block the removal).
+  domains="$(sed -nE 's/^(init_daemon_domain|domain_type)\(([a-z0-9_]+).*/\2/p' packaging/selinux/*.te |
+    LC_ALL=C sort -u | tr '\n' ' ')"
   mkdir -p "$sel/scripts"
   for s in pre post postun posttrans; do
-    sed "s/@MODULES@/${modules% }/" "packaging/selinux/scripts/$s" >"$sel/scripts/$s"
+    sed -e "s/@MODULES@/${modules% }/" -e "s/@DOMAINS@/${domains% }/" "packaging/selinux/scripts/$s" >"$sel/scripts/$s"
   done
   for entry in "${SELINUX[@]}"; do
     pkg="${entry%%=*}"

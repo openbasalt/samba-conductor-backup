@@ -5,6 +5,7 @@
 # (configuration and state the administrator keeps), so nothing is left
 # with a type that no longer exists.
 MODULES="@MODULES@"
+DOMAINS="@DOMAINS@"
 [ "$1" -eq 0 ] || exit 0
 [ -r /etc/selinux/config ] || exit 0
 . /etc/selinux/config
@@ -13,6 +14,15 @@ if [ "${SELINUXTYPE:-}" = targeted ]; then
 	if /usr/sbin/selinuxenabled; then
 		cp -f /etc/selinux/targeted/contexts/files/file_contexts "$pre"
 	fi
+	# A domain made permissive with "semanage permissive -a" has a module of
+	# its own (priority 400) that requires the domain: remove it first, or
+	# the modules below could not be removed.
+	present="$(/usr/sbin/semodule -s targeted -l 2>/dev/null)"
+	for d in $DOMAINS; do
+		if printf '%s\n' "$present" | grep -qx "permissive_$d"; then
+			/usr/sbin/semodule -n -X 400 -s targeted -r "permissive_$d" >/dev/null 2>&1 || :
+		fi
+	done
 	/usr/sbin/semodule -n -X 200 -s targeted -r $MODULES >/dev/null 2>&1 || :
 	if /usr/sbin/selinuxenabled; then
 		/usr/sbin/load_policy || :

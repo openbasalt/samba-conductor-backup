@@ -39,9 +39,17 @@ maintained and will not receive fixes.
 ## Verifying releases
 
 Release packages are listed in a `SHA256SUMS` file signed with the project's
-release key (`SHA256SUMS.asc`); the APT repository is signed with the same
-key. Check the key fingerprint against the one published on the project's
-site before trusting it.
+release key (`SHA256SUMS.asc`); the APT repository and the RPM repository
+(`basalt-tools` on Basalt OS) are signed with the same key. The key is the
+OpenBasalt release key, published at
+<https://obpkg.org/keys/openbasalt-release-key.asc>; check its fingerprint
+before trusting it:
+
+- primary key `3601 7348 42BD 4E48 2D19  DE4A E4EE D5EC A395 B302`
+- packages signing subkey `3024 61D2 6520 E077 D07F  FCA9 AA27 C62C 36CC FC4B`
+
+How to verify a download: `planning/docs/release-keys.md` in
+[samba-conductor-planning](https://github.com/openbasalt/samba-conductor-planning).
 
 ## Components
 
