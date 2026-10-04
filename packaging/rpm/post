@@ -1,0 +1,16 @@
+#!/bin/sh
+# %post of conductor-backup (RPM), as Fedora's %systemd_post: on a fresh
+# install the units get their preset state. The distribution's default
+# preset disables them (Fedora and Basalt OS: 99-default-disable.preset), so
+# nothing is enabled or started: backups need keys, recipients and
+# destinations first. systemd's own file triggers reload the manager at the
+# end of the transaction.
+UNITS="conductor-backup.timer conductor-backup.path conductor-backup-drill.timer"
+if [ "$1" -eq 1 ]; then
+	if [ -x /usr/lib/systemd/systemd-update-helper ]; then
+		/usr/lib/systemd/systemd-update-helper install-system-units $UNITS || :
+	else
+		systemctl --no-reload preset $UNITS >/dev/null 2>&1 || :
+	fi
+fi
+exit 0

@@ -72,6 +72,8 @@ drills (requests are signed by the DC).
 
 ## Install on a domain controller (Debian 13 / Ubuntu 26.04)
 
+Basalt OS and Fedora (RPM packages, SELinux): [`docs/install-fedora.md`](docs/install-fedora.md).
+
 Requires conductor and conductor-helper installed (<https://github.com/openbasalt/samba-conductor/blob/main/docs/install.md>).
 
 ### With the package (recommended)

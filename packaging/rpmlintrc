@@ -1,0 +1,27 @@
+# rpmlint filters for the conductor-backup packages (packaging/rpmlint.sh runs
+# Fedora 44's rpmlint with --strict). Each filter says why it is right here.
+
+# The binary is a static Go program by design: CGO off, built with the
+# upstream Go toolchain, one artifact for every supported distribution (the
+# same binary as the .deb). No libc to track.
+addFilter(r"statically-linked-binary /usr/bin/conductor-backup")
+# Not position independent: the Go linker's default executable mode, the
+# same binary as the .deb (building with -buildmode=pie is an open decision,
+# planning/docs/packaging.md).
+addFilter(r"position-independent-executable-suggested /usr/bin/conductor-backup")
+# The "conductor-backup" system user and group come from the package's own
+# sysusers.d entry (created in %pre); Fedora's registry of standard users
+# lists distribution packages only.
+addFilter(r"non-standard-(uid|gid) /(etc|var/lib)/conductor-backup")
+# Restricted on purpose: the configuration names destinations, accounts and
+# key paths; for root and the conductor-backup group only.
+addFilter(r"non-standard-dir-perm /etc/conductor-backup 750")
+addFilter(r"non-readable /etc/conductor-backup/(conductor-backup|drill).toml 640")
+# %postun removes the administrator's link to the helper drop-in this
+# package ships, only when the package is gone and the link dangles.
+addFilter(r"conductor-backup\.(x86_64|aarch64): E: dangerous-command-in-%postun rm")
+# The SELinux scriptlets are Fedora's own %selinux_relabel_pre/_post and
+# %selinux_modules_uninstall macros: a copy of the file contexts is taken
+# before the module changes and removed after the relabel.
+addFilter(r"conductor-backup-selinux\.noarch: E: dangerous-command-in-%(pre|postun) cp")
+addFilter(r"conductor-backup-selinux\.noarch: E: dangerous-command-in-%posttrans rm")

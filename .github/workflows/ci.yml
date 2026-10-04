@@ -1,6 +1,7 @@
-# Continuous integration of conductor-backup: the quality gates, then both packages
-# (amd64 and arm64, cross-compiled with CGO off) checked by Debian 13's
-# lintian. Actions are pinned by commit SHA. Release builds: release.yml.
+# Continuous integration of conductor-backup: the quality gates, then the packages
+# (.deb and .rpm for amd64/x86_64 and arm64/aarch64, cross-compiled with CGO
+# off, and the noarch SELinux policy package built in a Fedora 44
+# container) checked by Debian 13's lintian and Fedora 44's rpmlint. Actions are pinned by commit SHA. Release builds: release.yml.
 name: ci
 
 on:
@@ -92,12 +93,15 @@ jobs:
         with:
           go-version-file: conductor-backup/go.mod
           cache-dependency-path: conductor-backup/go.sum
-      - name: Packages (amd64, arm64) and SBOMs
+      - name: Packages (deb and rpm, amd64 and arm64), SELinux policy, SBOMs
         working-directory: conductor-backup
         run: make package
       - name: lintian (Debian 13)
         working-directory: conductor-backup
         run: make lintian
+      - name: rpmlint (Fedora 44)
+        working-directory: conductor-backup
+        run: make rpmlint
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: conductor-backup-packages

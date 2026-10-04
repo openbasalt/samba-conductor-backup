@@ -1,0 +1,14 @@
+#!/bin/sh
+# %posttrans of the SELinux policy package (Fedora's %selinux_relabel_post):
+# relabel the paths whose file context the new modules changed (for example
+# /etc/conductor when conductor was installed before its policy).
+[ -r /etc/selinux/config ] || exit 0
+. /etc/selinux/config
+if /usr/sbin/selinuxenabled 2>/dev/null && [ "${SELINUXTYPE:-}" = targeted ]; then
+	pre=/var/lib/selinux/targeted/file_contexts.pre
+	if [ -f "$pre" ]; then
+		/usr/sbin/fixfiles -C "$pre" restore >/dev/null 2>&1 || :
+		rm -f "$pre"
+	fi
+fi
+exit 0

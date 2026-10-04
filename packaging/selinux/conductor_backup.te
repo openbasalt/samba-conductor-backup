@@ -1,0 +1,175 @@
+policy_module(conductor_backup, 1.0.0)
+
+# SELinux policy of conductor-backup.
+#
+# On a domain controller conductor-backup.service runs as the unprivileged
+# "conductor-backup" user in conductor_backup_t: it asks conductor-helper
+# for a backup over the helper's backup socket (the helper, in
+# conductor_helper_t, runs samba-tool and encrypts with age), then uploads
+# the archive to S3-compatible storage (HTTPS) or a local destination,
+# verifies, prunes and alerts (SMTP, webhook). The helper's own access to
+# this package's files is granted here, in an optional block that applies
+# when the conductor module is loaded.
+#
+# Restore drills (conductor-backup-drill.service, on a separate drill host,
+# never a domain controller) build a network-less sandbox with namespaces
+# and mounts and run samba-tool restore and samba as root: they run in
+# conductor_backup_drill_t, an unconfined domain (set by the unit drop-in
+# this package ships), so they are labeled and auditable but not restricted
+# beyond the unit's own sandbox.
+
+########################################
+#
+# Declarations
+#
+
+type conductor_backup_t;
+type conductor_backup_exec_t;
+init_daemon_domain(conductor_backup_t, conductor_backup_exec_t)
+
+type conductor_backup_drill_t;
+domain_type(conductor_backup_drill_t)
+domain_entry_file(conductor_backup_drill_t, conductor_backup_exec_t)
+role system_r types conductor_backup_drill_t;
+
+# /etc/conductor-backup: conductor-backup.toml, drill.toml, recipients.txt,
+# CA files.
+type conductor_backup_conf_t;
+files_config_file(conductor_backup_conf_t)
+
+# /etc/conductor-backup/credentials: signing key, S3 and SMTP credentials,
+# the backup account's password, the drill identity. Only systemd reads
+# them (LoadCredential=).
+type conductor_backup_cred_t;
+files_type(conductor_backup_cred_t)
+
+# /var/lib/conductor-backup: spool (encrypted archives in transit), requests,
+# policy and state.
+type conductor_backup_var_lib_t;
+files_type(conductor_backup_var_lib_t)
+
+# /var/lib/conductor-backup-drill: the drill host's working state.
+type conductor_backup_drill_var_lib_t;
+files_type(conductor_backup_drill_var_lib_t)
+
+# A local backup destination (default /var/backups/conductor-backup).
+type conductor_backup_store_t;
+files_type(conductor_backup_store_t)
+
+type conductor_backup_tmp_t;
+files_tmp_file(conductor_backup_tmp_t)
+
+########################################
+#
+# conductor-backup on a domain controller
+#
+
+allow conductor_backup_t self:process { getsched setsched signal_perms };
+allow conductor_backup_t self:fifo_file rw_fifo_file_perms;
+allow conductor_backup_t self:unix_stream_socket create_stream_socket_perms;
+allow conductor_backup_t self:unix_dgram_socket create_socket_perms;
+allow conductor_backup_t self:netlink_route_socket r_netlink_socket_perms;
+allow conductor_backup_t self:tcp_socket create_stream_socket_perms;
+allow conductor_backup_t self:udp_socket create_socket_perms;
+
+read_files_pattern(conductor_backup_t, conductor_backup_conf_t, conductor_backup_conf_t)
+list_dirs_pattern(conductor_backup_t, conductor_backup_conf_t, conductor_backup_conf_t)
+read_lnk_files_pattern(conductor_backup_t, conductor_backup_conf_t, conductor_backup_conf_t)
+
+manage_dirs_pattern(conductor_backup_t, conductor_backup_var_lib_t, conductor_backup_var_lib_t)
+manage_files_pattern(conductor_backup_t, conductor_backup_var_lib_t, conductor_backup_var_lib_t)
+files_search_var_lib(conductor_backup_t)
+
+manage_dirs_pattern(conductor_backup_t, conductor_backup_store_t, conductor_backup_store_t)
+manage_files_pattern(conductor_backup_t, conductor_backup_store_t, conductor_backup_store_t)
+files_search_var(conductor_backup_t)
+
+manage_dirs_pattern(conductor_backup_t, conductor_backup_tmp_t, conductor_backup_tmp_t)
+manage_files_pattern(conductor_backup_t, conductor_backup_tmp_t, conductor_backup_tmp_t)
+files_tmp_filetrans(conductor_backup_t, conductor_backup_tmp_t, { file dir })
+
+kernel_read_system_state(conductor_backup_t)
+kernel_read_kernel_sysctls(conductor_backup_t)
+kernel_read_net_sysctls(conductor_backup_t)
+
+dev_read_sysfs(conductor_backup_t)
+dev_read_urand(conductor_backup_t)
+dev_read_rand(conductor_backup_t)
+
+fs_getattr_all_fs(conductor_backup_t)
+fs_search_cgroup_dirs(conductor_backup_t)
+fs_read_cgroup_files(conductor_backup_t)
+
+files_read_etc_files(conductor_backup_t)
+auth_use_nsswitch(conductor_backup_t)
+miscfiles_read_localization(conductor_backup_t)
+miscfiles_read_generic_certs(conductor_backup_t)
+sysnet_dns_name_resolve(conductor_backup_t)
+logging_send_syslog_msg(conductor_backup_t)
+
+# S3-compatible storage (443 or 9000; another port: semanage port -a -t
+# http_port_t), webhooks, SMTP alerts.
+corenet_tcp_connect_http_port(conductor_backup_t)
+corenet_tcp_connect_smtp_port(conductor_backup_t)
+
+# conductor-backup.path watches the requests directory.
+allow init_t conductor_backup_var_lib_t:dir { getattr search read watch };
+
+########################################
+#
+# conductor-helper (conductor module): asked for backups by
+# conductor_backup_t, writes the spool, requests and policy, reads the
+# recipients.
+#
+
+optional_policy(`
+	gen_require(`
+		type conductor_helper_t, conductor_helper_var_run_t;
+	')
+
+	files_search_pids(conductor_backup_t)
+	stream_connect_pattern(conductor_backup_t, conductor_helper_var_run_t, conductor_helper_var_run_t, conductor_helper_t)
+	conductor_backup_manage_lib(conductor_helper_t)
+	conductor_backup_read_config(conductor_helper_t)
+')
+
+########################################
+#
+# Restore drills (drill host): unconfined, see the header.
+#
+
+allow init_t conductor_backup_drill_t:process transition;
+allow init_t conductor_backup_drill_t:process2 { nnp_transition nosuid_transition };
+allow conductor_backup_drill_t init_t:fd use;
+allow conductor_backup_drill_t init_t:process sigchld;
+unconfined_domain(conductor_backup_drill_t)
+
+########################################
+#
+# systemd (init_t) reads the credentials for LoadCredential=; nothing else
+# in the policy may.
+#
+
+gen_require(`
+	type init_t;
+')
+list_dirs_pattern(init_t, conductor_backup_cred_t, conductor_backup_cred_t)
+read_files_pattern(init_t, conductor_backup_cred_t, conductor_backup_cred_t)
+
+########################################
+#
+# Started by systemd: the units set NoNewPrivileges=yes, and the services
+# read their credentials from $CREDENTIALS_DIRECTORY (/run/credentials/<unit>,
+# which systemd labels init_var_run_t).
+#
+
+init_nnp_daemon_domain(conductor_backup_t)
+
+gen_require(`
+	type init_var_run_t;
+')
+allow conductor_backup_t init_var_run_t:dir search_dir_perms;
+allow conductor_backup_t init_var_run_t:file read_file_perms;
+
+# SQLite in WAL mode maps its shared-memory index (<db>-shm).
+allow conductor_backup_t conductor_backup_var_lib_t:file map;

@@ -1,0 +1,62 @@
+## <summary>Samba Conductor backup: encrypted Samba AD backups, restore and restore drills.</summary>
+
+########################################
+## <summary>
+##	Execute conductor-backup in the conductor_backup domain.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed to transition.
+##	</summary>
+## </param>
+#
+interface(`conductor_backup_domtrans',`
+	gen_require(`
+		type conductor_backup_t, conductor_backup_exec_t;
+	')
+
+	corecmd_search_bin($1)
+	domtrans_pattern($1, conductor_backup_exec_t, conductor_backup_t)
+')
+
+########################################
+## <summary>
+##	Manage the conductor-backup state (/var/lib/conductor-backup): the
+##	spool, requests and policy that conductor-helper writes.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+#
+interface(`conductor_backup_manage_lib',`
+	gen_require(`
+		type conductor_backup_var_lib_t;
+	')
+
+	files_search_var_lib($1)
+	manage_dirs_pattern($1, conductor_backup_var_lib_t, conductor_backup_var_lib_t)
+	manage_files_pattern($1, conductor_backup_var_lib_t, conductor_backup_var_lib_t)
+')
+
+########################################
+## <summary>
+##	Read the conductor-backup configuration (/etc/conductor-backup,
+##	recipients.txt among it).
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+#
+interface(`conductor_backup_read_config',`
+	gen_require(`
+		type conductor_backup_conf_t;
+	')
+
+	files_search_etc($1)
+	read_files_pattern($1, conductor_backup_conf_t, conductor_backup_conf_t)
+	list_dirs_pattern($1, conductor_backup_conf_t, conductor_backup_conf_t)
+')

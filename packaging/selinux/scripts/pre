@@ -1,0 +1,11 @@
+#!/bin/sh
+# %pre of the SELinux policy package (Fedora's %selinux_relabel_pre): keep
+# the file contexts as they are before the module changes them, so that
+# %posttrans relabels exactly the paths whose context changed.
+[ -r /etc/selinux/config ] || exit 0
+. /etc/selinux/config
+if /usr/sbin/selinuxenabled 2>/dev/null && [ "${SELINUXTYPE:-}" = targeted ]; then
+	[ -f /var/lib/selinux/targeted/file_contexts.pre ] ||
+		cp -f /etc/selinux/targeted/contexts/files/file_contexts /var/lib/selinux/targeted/file_contexts.pre
+fi
+exit 0

@@ -1,0 +1,18 @@
+#!/bin/sh
+# %post of the SELinux policy package (Fedora's %selinux_modules_install):
+# install the modules at priority 200 and load the policy. On upgrade the
+# same command replaces them.
+MODULES="@MODULES@"
+[ -r /etc/selinux/config ] || exit 0
+. /etc/selinux/config
+if [ "${SELINUXTYPE:-}" = targeted ]; then
+	files=""
+	for m in $MODULES; do
+		for f in /usr/share/selinux/packages/targeted/$m.pp.bz2 /usr/share/selinux/packages/targeted/$m.cil; do
+			[ -f "$f" ] && files="$files $f"
+		done
+	done
+	/usr/sbin/semodule -n -s targeted -X 200 -i $files || :
+	/usr/sbin/selinuxenabled && /usr/sbin/load_policy || :
+fi
+exit 0

@@ -1,0 +1,12 @@
+#!/bin/sh
+# %preun of conductor-backup (RPM), as Fedora's %systemd_preun: on removal
+# (not on upgrade) the units are disabled and stopped.
+UNITS="conductor-backup.timer conductor-backup.path conductor-backup-drill.timer conductor-backup.service conductor-backup-drill.service"
+if [ "$1" -eq 0 ]; then
+	if [ -x /usr/lib/systemd/systemd-update-helper ]; then
+		/usr/lib/systemd/systemd-update-helper remove-system-units $UNITS || :
+	else
+		systemctl --no-reload disable --now $UNITS >/dev/null 2>&1 || :
+	fi
+fi
+exit 0

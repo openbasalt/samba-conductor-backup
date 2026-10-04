@@ -1,0 +1,20 @@
+#!/bin/sh
+# %postun of conductor-backup (RPM). Its units are timers, a path unit and
+# oneshot services, which start the new binary on their next run: an upgrade
+# restarts nothing. On removal rpm keeps edited configuration as .rpmsave
+# and leaves what the administrator created (credentials (signing key, S3
+# keys, drill identity), recipients.txt and /var/lib/conductor-backup;
+# backups in a bucket or a local destination are never touched) and the
+# system user.
+if [ "$1" -eq 0 ]; then
+	# The helper drop-in the administrator linked (README.Fedora) points
+	# into this package: drop the link with it, or conductor-helper would
+	# carry a dangling drop-in.
+	link=/etc/systemd/system/conductor-helper.service.d/conductor-backup.conf
+	if [ -L "$link" ] && [ ! -e "$link" ]; then
+		rm -f "$link"
+		rmdir /etc/systemd/system/conductor-helper.service.d 2>/dev/null || :
+		systemctl daemon-reload >/dev/null 2>&1 || :
+	fi
+fi
+exit 0

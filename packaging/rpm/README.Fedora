@@ -1,0 +1,39 @@
+conductor-backup for Fedora and Basalt OS
+=========================================
+
+Installing the package creates the "conductor-backup" system user
+(sysusers.d), /etc/conductor-backup (root:conductor-backup 0750) with
+credentials/ (root 0700), the configuration files conductor-backup.toml and
+drill.toml (example values, 0640) and /var/lib/conductor-backup. It does
+not enable or start anything. Where the targeted SELinux policy is
+installed, conductor-backup-selinux comes with it: backups run in
+conductor_backup_t; restore drills run unconfined (see its README).
+
+On a domain controller (conductor and conductor-helper installed):
+
+  1. The backup account, credentials (backup-account, signing-key, s3),
+     recipients.txt and conductor-backup.toml: see the README's
+     "Install on a domain controller".
+  2. Enable backups in /etc/conductor/helper.toml ([backup] enabled = true)
+     and link the helper drop-in shipped by this package:
+       sudo install -d /etc/systemd/system/conductor-helper.service.d
+       sudo ln -s /usr/share/conductor-backup/systemd/conductor-helper-backup.conf \
+         /etc/systemd/system/conductor-helper.service.d/conductor-backup.conf
+       sudo systemctl daemon-reload && sudo systemctl restart conductor-helper
+  3. sudo systemctl enable --now conductor-backup.timer conductor-backup.path
+
+A local destination other than /var/backups/conductor-backup needs the
+same SELinux type: semanage fcontext -a -t conductor_backup_store_t
+'/srv/backups(/.*)?' && restorecon -R /srv/backups. An S3 endpoint on
+another port than 443 or 9000: semanage port -a -t http_port_t -p tcp <port>.
+
+On a drill host (never a DC): drill.toml, its credentials, then
+  sudo systemctl enable --now conductor-backup-drill.timer
+
+"dnf remove conductor-backup" stops and disables the units, removes the
+packaged files and the helper drop-in link; it keeps the credentials
+(signing key, S3 keys, drill identity), recipients.txt,
+/var/lib/conductor-backup and the system user. Backups already in a bucket
+or a local destination are never deleted.
+
+Full guide: https://github.com/openbasalt/samba-conductor-backup/blob/main/docs/install-fedora.md

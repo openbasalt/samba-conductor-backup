@@ -1,0 +1,13 @@
+#!/bin/sh
+# %pre of conductor-backup (RPM): the system user exists before the payload
+# is unpacked, because /etc/conductor-backup and /var/lib/conductor-backup
+# are owned by it. The entry is the one in
+# /usr/lib/sysusers.d/conductor-backup.conf (build.sh checks that they
+# match); systemd-sysusers reads it from stdin, as Fedora's
+# %sysusers_create_compat does.
+if [ -x /usr/bin/systemd-sysusers ]; then
+	/usr/bin/systemd-sysusers --replace=/usr/lib/sysusers.d/conductor-backup.conf - <<'SYSUSERS' || :
+u conductor-backup - "Samba Conductor backup" /var/lib/conductor-backup /usr/sbin/nologin
+SYSUSERS
+fi
+exit 0

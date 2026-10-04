@@ -1,13 +1,17 @@
-# nfpm configuration of the "conductor-backup" package. Built by
-# packaging/build.sh, which sets ARCH, DEB_VERSION, DEB_REVISION, BUILD
-# (staging directory) and SOURCE_DATE_EPOCH (every timestamp). Paths are
-# relative to the repository root.
+# nfpm configuration of the "conductor-backup" package, one file for the .deb
+# and the .rpm. Built by packaging/build.sh, which sets ARCH, PKG_VERSION,
+# PKG_REVISION, BUILD (staging directory) and SOURCE_DATE_EPOCH (every
+# timestamp). Paths are relative to the repository root. Entries marked
+# "packager: deb" or "packager: rpm" exist in one format only (Debian keeps
+# docs and licenses in /usr/share/doc and sets modes in postinst; Fedora
+# keeps licenses in /usr/share/licenses and owns its directories in the
+# payload).
 name: conductor-backup
 arch: ${ARCH}
 platform: linux
-version: ${DEB_VERSION}
+version: ${PKG_VERSION}
 version_schema: none
-release: ${DEB_REVISION}
+release: ${PKG_REVISION}
 section: admin
 priority: optional
 maintainer: Samba Conductor maintainers <samba-conductor@openbasalt.org>
@@ -24,8 +28,8 @@ description: |-
   separate drill host it restores the newest backup into a network-less
   sandbox and checks that the domain answers, proving the backups restore.
   .
-  Nothing is started at installation (see
-  /usr/share/doc/conductor-backup/README.Debian).
+  Nothing is started at installation (see the README in
+  /usr/share/doc/conductor-backup).
 
 depends:
   - systemd | systemd-standalone-sysusers | systemd-sysusers
@@ -33,6 +37,34 @@ suggests:
   - conductor
   - samba-ad-dc
   - iproute2
+
+rpm:
+  summary: Encrypted Samba AD backups, restore and restore drills
+  group: Applications/System
+  buildhost: build.samba-conductor.openbasalt.org
+  compression: zstd
+
+overrides:
+  deb:
+    scripts:
+      postinstall: packaging/scripts/postinst
+      preremove: packaging/scripts/prerm
+      postremove: packaging/scripts/postrm
+  rpm:
+    depends:
+      - systemd
+      # The SELinux policy wherever the targeted policy is installed
+      # (Fedora, Basalt OS): installed first, so the files get their labels.
+      - (conductor-backup-selinux if selinux-policy-targeted)
+    suggests:
+      - conductor
+      - samba-dc
+      - iproute
+    scripts:
+      preinstall: packaging/rpm/pre
+      postinstall: packaging/rpm/post
+      preremove: packaging/rpm/preun
+      postremove: packaging/rpm/postun
 
 contents:
   - expand: true
@@ -69,43 +101,130 @@ contents:
   - src: packaging/sysusers.conf
     dst: /usr/lib/sysusers.d/conductor-backup.conf
     file_info: {mode: 0644}
+  # Configuration. Debian: modes from postinst (dpkg-statoverride).
   - src: conductor-backup.toml.example
     dst: /etc/conductor-backup/conductor-backup.toml
     type: config|noreplace
+    packager: deb
+    file_info: {mode: 0644}
+  # Fedora: the package owns its directories with their final modes.
+  - dst: /etc/conductor-backup
+    type: dir
+    packager: rpm
+    file_info: {mode: 0750, owner: root, group: conductor-backup}
+  - src: conductor-backup.toml.example
+    dst: /etc/conductor-backup/conductor-backup.toml
+    type: config|noreplace
+    packager: rpm
+    file_info: {mode: 0640, owner: root, group: conductor-backup}
+  - src: drill.toml.example
+    dst: /etc/conductor-backup/drill.toml
+    type: config|noreplace
+    packager: deb
     file_info: {mode: 0644}
   - src: drill.toml.example
     dst: /etc/conductor-backup/drill.toml
     type: config|noreplace
+    packager: rpm
+    file_info: {mode: 0640, owner: root, group: conductor-backup}
+  - dst: /etc/conductor-backup/credentials
+    type: dir
+    packager: rpm
+    file_info: {mode: 0700, owner: root, group: root}
+  - dst: /var/lib/conductor-backup
+    type: dir
+    packager: rpm
+    file_info: {mode: 0700, owner: conductor-backup, group: conductor-backup}
+  # A plain file in the .deb, a documentation file (%doc) in the .rpm.
+  - src: recipients.txt.example
+    dst: /usr/share/doc/conductor-backup/examples/recipients.txt
+    packager: deb
     file_info: {mode: 0644}
   - src: recipients.txt.example
     dst: /usr/share/doc/conductor-backup/examples/recipients.txt
+    type: doc
+    packager: rpm
+    file_info: {mode: 0644}
+  # A plain file in the .deb, a documentation file (%doc) in the .rpm.
+  - expand: true
+    src: ${BUILD}/man/conductor-backup.8.gz
+    dst: /usr/share/man/man8/conductor-backup.8.gz
+    packager: deb
     file_info: {mode: 0644}
   - expand: true
     src: ${BUILD}/man/conductor-backup.8.gz
     dst: /usr/share/man/man8/conductor-backup.8.gz
+    type: doc
+    packager: rpm
     file_info: {mode: 0644}
+  # Debian documentation and licenses.
   - src: packaging/copyright
     dst: /usr/share/doc/conductor-backup/copyright
+    packager: deb
     file_info: {mode: 0644}
   - src: NOTICE
     dst: /usr/share/doc/conductor-backup/NOTICE
+    packager: deb
     file_info: {mode: 0644}
   - expand: true
     src: ${BUILD}/doc/conductor-backup/THIRD-PARTY-LICENSES.gz
     dst: /usr/share/doc/conductor-backup/THIRD-PARTY-LICENSES.gz
+    packager: deb
     file_info: {mode: 0644}
   - expand: true
     src: ${BUILD}/doc/conductor-backup/changelog.Debian.gz
     dst: /usr/share/doc/conductor-backup/changelog.Debian.gz
+    packager: deb
     file_info: {mode: 0644}
   - src: packaging/README.Debian
     dst: /usr/share/doc/conductor-backup/README.Debian
+    packager: deb
     file_info: {mode: 0644}
   - src: packaging/lintian-overrides
     dst: /usr/share/lintian/overrides/conductor-backup
+    packager: deb
     file_info: {mode: 0644}
 
-scripts:
-  postinstall: packaging/scripts/postinst
-  preremove: packaging/scripts/prerm
-  postremove: packaging/scripts/postrm
+  # Fedora documentation and licenses (%license, %doc), in directories the
+  # package owns (removed with it).
+  - dst: /usr/share/conductor-backup
+    type: dir
+    packager: rpm
+    file_info: {mode: 0755}
+  - dst: /usr/share/conductor-backup/systemd
+    type: dir
+    packager: rpm
+    file_info: {mode: 0755}
+  - dst: /usr/share/doc/conductor-backup
+    type: dir
+    packager: rpm
+    file_info: {mode: 0755}
+  - dst: /usr/share/doc/conductor-backup/examples
+    type: dir
+    packager: rpm
+    file_info: {mode: 0755}
+  - dst: /usr/share/licenses/conductor-backup
+    type: dir
+    packager: rpm
+    file_info: {mode: 0755}
+  - src: LICENSE
+    dst: /usr/share/licenses/conductor-backup/LICENSE
+    type: license
+    packager: rpm
+    file_info: {mode: 0644}
+  - src: NOTICE
+    dst: /usr/share/licenses/conductor-backup/NOTICE
+    type: license
+    packager: rpm
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${BUILD}/doc/conductor-backup/THIRD-PARTY-LICENSES
+    dst: /usr/share/licenses/conductor-backup/THIRD-PARTY-LICENSES
+    type: license
+    packager: rpm
+    file_info: {mode: 0644}
+  - src: packaging/rpm/README.Fedora
+    dst: /usr/share/doc/conductor-backup/README.Fedora
+    type: doc
+    packager: rpm
+    file_info: {mode: 0644}

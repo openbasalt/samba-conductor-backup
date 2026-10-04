@@ -1,0 +1,88 @@
+# nfpm configuration of the "conductor-backup-selinux" package (RPM only, noarch):
+# the SELinux policy module of conductor-backup for the
+# targeted policy (Fedora, Basalt OS). Built by packaging/build.sh after
+# packaging/selinux/build.sh; it sets PKG_VERSION, PKG_REVISION,
+# SELINUX_POLICY_VERSION (the policy the module was compiled against) and
+# SELINUX_BUILD (build/selinux). Paths are relative to the repository root.
+name: conductor-backup-selinux
+arch: all
+platform: linux
+version: ${PKG_VERSION}
+version_schema: none
+release: ${PKG_REVISION}
+maintainer: Samba Conductor maintainers <samba-conductor@openbasalt.org>
+vendor: OpenBasalt
+homepage: https://github.com/openbasalt/samba-conductor-backup
+# The sources are Apache-2.0; the compiled module contains expansions of the
+# reference policy's macros (selinux-policy, GPL-2.0-or-later).
+license: Apache-2.0 AND GPL-2.0-or-later
+description: |-
+  SELinux policy module for Samba Conductor backup
+  The targeted-policy module of conductor-backup: backups on a domain
+  controller run in conductor_backup_t (the helper socket, the spool, a
+  local destination, HTTPS to S3-compatible storage, SMTP alerts); restore
+  drills on a drill host run in conductor_backup_drill_t, an unconfined
+  domain. Installed with conductor-backup wherever the targeted policy is.
+
+rpm:
+  summary: SELinux policy module for Samba Conductor backup
+  group: System Environment/Base
+  buildhost: build.samba-conductor.openbasalt.org
+  compression: zstd
+  requires:
+    post:
+      - selinux-policy-targeted >= ${SELINUX_POLICY_VERSION}
+      - policycoreutils
+      - libselinux-utils
+  scripts:
+    posttrans: build/selinux/scripts/posttrans
+
+depends:
+  - selinux-policy-targeted >= ${SELINUX_POLICY_VERSION}
+
+scripts:
+  preinstall: build/selinux/scripts/pre
+  postinstall: build/selinux/scripts/post
+  postremove: build/selinux/scripts/postun
+
+contents:
+  - expand: true
+    src: ${SELINUX_BUILD}/conductor_backup.pp.bz2
+    dst: /usr/share/selinux/packages/targeted/conductor_backup.pp.bz2
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${SELINUX_BUILD}/conductor_backup.if
+    dst: /usr/share/selinux/devel/include/distributed/conductor_backup.if
+    file_info: {mode: 0644}
+  # Restore drills run in conductor_backup_drill_t (conductor_backup.te).
+  - dst: /usr/lib/systemd/system/conductor-backup-drill.service.d
+    type: dir
+    file_info: {mode: 0755}
+  - src: packaging/selinux/drill-selinux.conf
+    dst: /usr/lib/systemd/system/conductor-backup-drill.service.d/selinux.conf
+    file_info: {mode: 0644}
+
+  - dst: /usr/share/doc/conductor-backup-selinux
+    type: dir
+    file_info: {mode: 0755}
+  - src: packaging/selinux/README
+    dst: /usr/share/doc/conductor-backup-selinux/README
+    type: doc
+    file_info: {mode: 0644}
+
+  - dst: /usr/share/licenses/conductor-backup-selinux
+    type: dir
+    file_info: {mode: 0755}
+  - src: LICENSE
+    dst: /usr/share/licenses/conductor-backup-selinux/LICENSE
+    type: license
+    file_info: {mode: 0644}
+  - src: NOTICE
+    dst: /usr/share/licenses/conductor-backup-selinux/NOTICE
+    type: license
+    file_info: {mode: 0644}
+  - expand: true
+    src: ${SELINUX_BUILD}/doc/conductor-backup-selinux/THIRD-PARTY-LICENSES
+    dst: /usr/share/licenses/conductor-backup-selinux/THIRD-PARTY-LICENSES
+    type: license
+    file_info: {mode: 0644}

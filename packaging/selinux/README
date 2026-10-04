@@ -1,0 +1,35 @@
+conductor-backup-selinux: SELinux policy for conductor-backup
+=============================================================
+
+The module "conductor_backup" (targeted policy, priority 200):
+
+  conductor_backup_t        conductor-backup.service on a domain controller
+                            (user conductor-backup)
+  conductor_backup_drill_t  conductor-backup-drill.service on a drill host, set
+                            by /usr/lib/systemd/system/conductor-backup-drill.service.d/selinux.conf;
+                            an unconfined domain (the drill builds a network-less
+                            sandbox with namespaces and mounts and runs samba-tool
+                            restore and samba as root)
+
+File types:
+
+  conductor_backup_conf_t           /etc/conductor-backup (configuration, recipients)
+  conductor_backup_cred_t           /etc/conductor-backup/credentials (read by systemd only)
+  conductor_backup_var_lib_t        /var/lib/conductor-backup (spool, requests, policy)
+  conductor_backup_drill_var_lib_t  /var/lib/conductor-backup-drill
+  conductor_backup_store_t          /var/backups/conductor-backup (local destination)
+
+On a domain controller, backups go through conductor-helper
+(conductor_helper_t, from conductor-selinux), which this module lets write
+the spool and read the recipients. conductor_backup_t uploads over HTTPS
+(http_port_t: 443, 9000, ...) and sends alerts over SMTP. Another S3 port,
+another local destination:
+
+  semanage port -a -t http_port_t -p tcp 9900
+  semanage fcontext -a -t conductor_backup_store_t '/srv/backups(/.*)?'
+  restorecon -R /srv/backups
+
+Troubleshooting:
+
+  ausearch -m AVC,USER_AVC -ts recent -c conductor-backu
+  semanage permissive -a conductor_backup_t     (and -d to revert)

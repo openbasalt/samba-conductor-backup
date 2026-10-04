@@ -1,0 +1,12 @@
+# File contexts of the conductor_backup policy module (conductor-backup-selinux).
+/usr/bin/conductor-backup		--	gen_context(system_u:object_r:conductor_backup_exec_t,s0)
+/usr/local/bin/conductor-backup		--	gen_context(system_u:object_r:conductor_backup_exec_t,s0)
+
+/etc/conductor-backup(/.*)?			gen_context(system_u:object_r:conductor_backup_conf_t,s0)
+/etc/conductor-backup/credentials(/.*)?		gen_context(system_u:object_r:conductor_backup_cred_t,s0)
+
+/var/lib/conductor-backup(/.*)?			gen_context(system_u:object_r:conductor_backup_var_lib_t,s0)
+/var/lib/conductor-backup-drill(/.*)?		gen_context(system_u:object_r:conductor_backup_drill_var_lib_t,s0)
+
+# The default local destination (conductor-backup.service ReadWritePaths=).
+/var/backups/conductor-backup(/.*)?		gen_context(system_u:object_r:conductor_backup_store_t,s0)
