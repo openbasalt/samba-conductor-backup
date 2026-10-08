@@ -8,6 +8,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs on main (for example after a change of the CI App or its
+  # settings, when there is no new commit to push).
+  workflow_dispatch:
 
 permissions:
   contents: read
