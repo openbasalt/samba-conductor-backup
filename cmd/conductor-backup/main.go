@@ -42,6 +42,11 @@ privileged part):
                               prune, exchange drill requests/reports, alert
                               (run by conductor-backup.service, which holds
                               the credentials)
+  run --scheduled --loop 1m   keep running (containers, no systemd): requests
+                              picked up every interval, a scheduled run every
+                              --full-every (default 1h)
+  healthcheck [--max-age D]   exit 0 when run --loop is alive and the helper's
+                              backup socket exists (container healthcheck)
   request backup|drill [--wait]
                               ask the service for a backup or a drill now
                               (root or conductor-backup; starts through
@@ -90,6 +95,8 @@ func main() {
 		err = cmdRun(ctx, log, args)
 	case "check":
 		code, err = cmdCheck(ctx, log, args)
+	case "healthcheck":
+		err = cmdHealthcheck(args)
 	case "request":
 		err = cmdRequest(ctx, args)
 	case "status":
@@ -181,7 +188,11 @@ func cmdRun(ctx context.Context, log *slog.Logger, args []string) error {
 	fs, path := flags("run")
 	scheduled := fs.Bool("scheduled", false, "back up only when the schedule says so (timer)")
 	now := fs.Bool("now", false, "back up now")
+	loop, fullEvery := loopFlags(fs)
 	parse(fs, args)
+	if *loop != 0 && *now {
+		return errors.New("--loop and --now exclude each other")
+	}
 	cfg, err := config.Load(*path)
 	if err != nil {
 		return err
@@ -190,7 +201,12 @@ func cmdRun(ctx context.Context, log *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	return r.Run(ctx, runner.Options{Scheduled: *scheduled || !*now, Force: *now})
+	opts := runner.Options{Scheduled: *scheduled || !*now, Force: *now}
+	if *loop != 0 {
+		return runLoop(ctx, log, r.Dir, loopOptions{Interval: *loop, FullEvery: *fullEvery},
+			func(ctx context.Context) error { return r.Run(ctx, opts) })
+	}
+	return r.Run(ctx, opts)
 }
 
 func cmdRequest(ctx context.Context, args []string) error {

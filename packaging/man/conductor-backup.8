@@ -24,6 +24,16 @@ On a domain controller (user conductor-backup):
 Back up when due (timer) or now, upload, verify, prune, exchange drill
 requests and reports, alert.
 .TP
+.B run \-\-scheduled \-\-loop INTERVAL [\-\-full\-every DURATION]
+Keep running where there is no systemd (containers): pending requests are
+picked up every INTERVAL, a scheduled run happens every DURATION (default
+1h), and a heartbeat file is kept in the state directory.
+.TP
+.B healthcheck [\-\-max\-age DURATION]
+Exit 0 when the heartbeat of
+.B run \-\-loop
+is recent (default 3m) and conductor-helper's backup socket exists.
+.TP
 .B request backup|drill [\-\-wait]
 Ask the service for a backup or a drill now.
 .TP
