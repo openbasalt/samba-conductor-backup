@@ -4,9 +4,17 @@
 # family go.work; `make check GOWORK=$PWD/../go.work` checks it against
 # local copies of the sibling modules instead.
 export GOWORK ?= off
-GOBIN := $(shell go env GOPATH)/bin
-STATICCHECK := $(GOBIN)/staticcheck
-GOVULNCHECK := $(GOBIN)/govulncheck
+# Gate tools, pinned (the same versions as CI) and built into
+# .tools/<go version>/, so a stale or mismatched binary on $GOPATH/bin
+# never runs the gates. staticcheck v0.8.1 pins golang.org/x/tools v0.44,
+# which cannot read the export data version 5 written by Go 1.27.2, so it
+# is built against XTOOLS_VERSION until a staticcheck release carries it.
+STATICCHECK_VERSION := v0.8.1
+XTOOLS_VERSION := v0.51.0
+GOVULNCHECK_VERSION := v1.8.0
+TOOLS_DIR := $(CURDIR)/.tools/$(shell go env GOVERSION)
+STATICCHECK := $(TOOLS_DIR)/staticcheck-$(STATICCHECK_VERSION)-xtools-$(XTOOLS_VERSION)
+GOVULNCHECK := $(TOOLS_DIR)/govulncheck-$(GOVULNCHECK_VERSION)
 VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -33,9 +41,20 @@ staticcheck: tools
 vulncheck: tools
 	$(GOVULNCHECK) ./...
 
-tools:
-	@test -x $(STATICCHECK) || go install honnef.co/go/tools/cmd/staticcheck@latest
-	@test -x $(GOVULNCHECK) || go install golang.org/x/vuln/cmd/govulncheck@latest
+tools: $(STATICCHECK) $(GOVULNCHECK)
+
+$(STATICCHECK):
+	@mkdir -p $(TOOLS_DIR)
+	tmp="$$(mktemp -d)" && trap 'rm -rf "$$tmp"' EXIT && cd "$$tmp" && \
+		go mod init gatetools >/dev/null 2>&1 && \
+		go get honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) golang.org/x/tools@$(XTOOLS_VERSION) && \
+		go build -o $@ honnef.co/go/tools/cmd/staticcheck
+
+$(GOVULNCHECK):
+	@mkdir -p $(TOOLS_DIR)
+	tmp="$$(mktemp -d)" && trap 'rm -rf "$$tmp"' EXIT && \
+		GOBIN="$$tmp" go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) && \
+		mv "$$tmp/govulncheck" $@
 
 # Debian and RPM packages, the SELinux policy package and their SBOMs in
 # dist/ (amd64/x86_64 and arm64/aarch64 by default; version from the git tag,
