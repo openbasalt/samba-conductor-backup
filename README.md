@@ -5,7 +5,10 @@ drills, for Samba Conductor v2. Design: [docs/design.md](docs/design.md) and
 the family's [architecture.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/architecture.md), recovery runbook
 <https://github.com/openbasalt/samba-conductor/blob/main/docs/restore.md>.
 
-Status: pre-release, no tagged version yet. Validated in the two-DC lab, including
+Container image: `docker.io/openbasalt/samba-conductor-backup`, tags `0.1.0` and `latest`, also on `ghcr.io/openbasalt` with the same digests, see [containers.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/containers.md).
+
+Status: 0.1.0 released (signed GitHub release `v0.1.0`, APT packages
+`0.1.0-1`, container image above). Validated in the two-DC lab, including
 a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/blob/main/docs/usage-p3.md>).
 
 ## What it does
