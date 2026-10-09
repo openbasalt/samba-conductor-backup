@@ -1,7 +1,9 @@
 # Continuous integration of conductor-backup: the quality gates, then the packages
 # (.deb and .rpm for amd64/x86_64 and arm64/aarch64, cross-compiled with CGO
 # off, and the noarch SELinux policy package built in a Fedora 44
-# container) checked by Debian 13's lintian and Fedora 44's rpmlint. Actions are pinned by commit SHA. Release builds: release.yml.
+# container) checked by Debian 13's lintian and Fedora 44's rpmlint, and the
+# arm64 packages installed and run under QEMU (the release workflow's smoke).
+# Actions are pinned by commit SHA. Release builds: release.yml.
 name: ci
 
 on:
@@ -60,6 +62,15 @@ jobs:
       - name: rpmlint (Fedora 44)
         working-directory: conductor-backup
         run: make rpmlint
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - name: arm64 smoke (install and run under QEMU)
+        working-directory: conductor-backup
+        run: packaging/smoke.sh deb arm64
+      - name: aarch64 RPM smoke (install and run under QEMU, Fedora 44)
+        working-directory: conductor-backup
+        run: packaging/smoke.sh rpm arm64
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: conductor-backup-packages

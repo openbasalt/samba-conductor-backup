@@ -66,22 +66,10 @@ jobs:
           platforms: arm64
       - name: arm64 smoke (install and run under QEMU)
         working-directory: conductor-backup
-        run: |
-          docker run --rm --platform linux/arm64 -v "$PWD/dist:/dist:ro" \
-            docker.io/library/debian:trixie@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c \
-            sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends /dist/*_arm64.deb >/dev/null &&
-              for b in $(dpkg -L $(dpkg-deb -f /dist/*_arm64.deb Package) | grep "^/usr/bin/"); do
-                case "$b" in */conductor-helper) "$b" -version ;; *) "$b" version ;; esac || exit 1
-              done'
+        run: packaging/smoke.sh deb arm64
       - name: aarch64 RPM smoke (install and run under QEMU, Fedora 44)
         working-directory: conductor-backup
-        run: |
-          docker run --rm --platform linux/arm64 -v "$PWD/dist:/dist:ro" \
-            registry.fedoraproject.org/fedora:44@sha256:7011f51bd8089d345be42d41f0aa3190d258823528852a5e7ec976fe2fd20f53 \
-            sh -c 'dnf -y -q install --setopt=install_weak_deps=False /dist/*.aarch64.rpm >/dev/null &&
-              for b in $(rpm -ql $(rpm -qp --qf "%{NAME}\n" /dist/*.aarch64.rpm) | grep "^/usr/bin/"); do
-                case "$b" in */conductor-helper) "$b" -version ;; *) "$b" version ;; esac || exit 1
-              done'
+        run: packaging/smoke.sh rpm arm64
       - name: SHA256SUMS
         working-directory: conductor-backup/dist
         run: sha256sum -- *.deb *.rpm *.cdx.json > SHA256SUMS

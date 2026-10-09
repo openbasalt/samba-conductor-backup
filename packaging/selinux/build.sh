@@ -54,9 +54,13 @@ engine="$(command -v docker || command -v podman || true)"
 image="samba-conductor-selinux:$SELINUX_POLICY_DEVEL"
 if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
   ctx="$(mktemp -d)"
-  printf 'FROM %s\nRUN dnf -y -q install --setopt=install_weak_deps=False fedora-repos-archive \\\n && dnf -y -q install --setopt=install_weak_deps=False selinux-policy-devel-%s selinux-policy-%s selinux-policy-targeted-%s make bzip2 \\\n && dnf clean all\n' \
+  # Not quiet: a failed install shows dnf's own error in the build log. The
+  # loop retries the whole install after a clean, so a Fedora mirror that
+  # serves stale or half-synced metadata does not fail the build; dnf itself
+  # already retries each download.
+  printf 'FROM %s\nRUN for i in 1 2 3; do \\\n  dnf -y --setopt=install_weak_deps=False install fedora-repos-archive \\\n  && dnf -y --setopt=install_weak_deps=False install selinux-policy-devel-%s selinux-policy-%s selinux-policy-targeted-%s make bzip2 \\\n  && break; \\\n  [ "$i" = 3 ] && exit 1; dnf clean all; sleep $((i * 15)); \\\n done \\\n && dnf clean all\n' \
     "$FEDORA_IMAGE" "$SELINUX_POLICY_DEVEL" "$SELINUX_POLICY_DEVEL" "$SELINUX_POLICY_DEVEL" |
-    "$engine" build ${SELINUX_BUILDER_NETWORK:+--network="$SELINUX_BUILDER_NETWORK"} -q -t "$image" -f - "$ctx" >/dev/null
+    "$engine" build ${SELINUX_BUILDER_NETWORK:+--network="$SELINUX_BUILDER_NETWORK"} -t "$image" -f - "$ctx" >&2
   rmdir "$ctx"
 fi
 exec "$engine" run --rm --network=none --user "$(id -u):$(id -g)" -e HOME=/tmp \
