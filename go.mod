@@ -1,6 +1,6 @@
 module github.com/openbasalt/samba-conductor-backup
 
-go 1.27.2
+go 1.27.3
 
 // Sibling modules of the Samba Conductor family are pinned by commit
 // (pseudo-versions until they are tagged). A go.work in the family
