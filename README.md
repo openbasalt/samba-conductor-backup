@@ -232,8 +232,8 @@ conductor-backup status [--json]
 conductor-backup list [--destination N]
 conductor-backup verify ID|latest           # download + SHA-256, no decryption
 conductor-backup prune [--dry-run]
-conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP]
-conductor-backup drill [--now] [--backup ID]
+conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP] [--accept-older]
+conductor-backup drill [--now] [--backup ID] [--accept-older]
 conductor-backup keygen signing|age --out FILE
 conductor-backup pubkey FILE
 ```

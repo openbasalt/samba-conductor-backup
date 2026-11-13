@@ -109,6 +109,36 @@ and the recovery procedures in the
 - A backup a destination missed waits in the spool, raises the "failed"
   alert, and is uploaded to that destination by the next run.
 
+### Object lock and rollback
+
+A bucket writer cannot forge a backup, but can delete the newest ones (or
+their manifests): "latest" would then quietly mean an older domain, and
+drills would keep passing on it.
+
+- Use object lock. `object_lock_days` locks the archives
+  (`<id>.tar.age`); manifests are written without a lock. To lock
+  manifests, drill requests and reports as well, give the bucket a
+  default retention (compliance mode, at least as long as the retention
+  policy keeps backups): every new object is then locked, and pruning
+  removes objects only after their lock expires. With the lock in
+  compliance mode, not even the bucket owner can delete a backup early.
+- Hosts remember the newest backup they have seen (a high-water mark).
+  Retention always keeps the newest complete backup, so the newest usable
+  backup never gets older on its own. When it does, a drill host refuses
+  to drill "the newest backup" (the drill fails with the reason and an
+  alert goes out, at most once a day) until an operator runs
+  `conductor-backup drill --now --accept-older`, which accepts the older
+  backup and resets the mark. `restore latest` prints the chosen backup's
+  age, warns when it is more than a day old, and refuses when the
+  restoring host's own records (the DC's last good backup, or a drill
+  host's mark) name a newer backup, unless `--accept-older` is given. A
+  restore by explicit ID is never refused.
+- The mark lives on the host, not in the bucket: a restore on a fresh
+  host after a total loss has none, so check the age it prints against
+  what you expect. A tamper-evident chain inside the signed manifests
+  (each naming its predecessor) would close that gap; it needs a manifest
+  format change and is not implemented.
+
 ## Retention
 
 - Keep the newest backup of each of the last N days, M ISO weeks and K

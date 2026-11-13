@@ -45,6 +45,14 @@ type Options struct {
 	WithConductorState bool
 	ConductorDB        string
 	SambaTool          string
+	// Seen are high-water marks this host keeps (the newest backup a DC
+	// made or a drill host saw): "latest" is refused when the newest
+	// backup in the destination is older than any of them, unless
+	// AcceptOlder.
+	Seen        []runner.Mark
+	AcceptOlder bool
+	// Now is the clock (tests).
+	Now func() time.Time
 }
 
 // Result describes what was restored.
@@ -85,6 +93,11 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	b, err := runner.Latest(list, id)
 	if err != nil {
 		return nil, err
+	}
+	if id == "" {
+		if err := checkLatest(b, o, log); err != nil {
+			return nil, err
+		}
 	}
 	fmt.Fprintf(log, "backup %s from %s (%d bytes, sha256 %s)\n", b.ID, s.Name(), b.Manifest.Size, b.Manifest.SHA256)
 	if err := os.MkdirAll(o.Target, 0o700); err != nil {
@@ -215,6 +228,38 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	}
 	res.Duration = time.Since(start)
 	return res, nil
+}
+
+// staleAfter: "latest" older than this gets a warning.
+const staleAfter = 26 * time.Hour
+
+// checkLatest prints what "latest" resolved to and refuses it when a
+// high-water mark of this host names a newer backup (newer backups were
+// removed from the destination), unless the operator accepts it.
+func checkLatest(b runner.Listed, o Options, log io.Writer) error {
+	now := time.Now()
+	if o.Now != nil {
+		now = o.Now()
+	}
+	at := b.Manifest.CreatedAt
+	age := now.Sub(at).Round(time.Minute)
+	fmt.Fprintf(log, "latest: %s, created %s (%s ago)\n", b.ID, at.UTC().Format(time.RFC3339), age)
+	if age > staleAfter {
+		fmt.Fprintf(log, "WARNING: the newest backup in this destination is %s old. If newer backups should exist, they may have been\n"+
+			"deleted: compare with `conductor-backup list` on other destinations and the DC's status before restoring.\n", age)
+	}
+	cur := []runner.Listed{b}
+	for _, m := range o.Seen {
+		m := m
+		if _, err := runner.CheckRollback(cur, &m); err != nil {
+			if o.AcceptOlder {
+				fmt.Fprintf(log, "WARNING: %v (accepted with --accept-older)\n", err)
+				continue
+			}
+			return fmt.Errorf("%w; restore that backup by its ID, or pass --accept-older", err)
+		}
+	}
+	return nil
 }
 
 func tlsMode(param string) os.FileMode {

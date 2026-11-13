@@ -33,6 +33,9 @@ path_style = true
 credentials = "s3"                               # TOML: access_key_id, secret_access_key
 # object_lock_mode = "GOVERNANCE"                # bucket created with object lock
 # object_lock_days = 30
+# Recommended: COMPLIANCE mode, and a default retention on the bucket so
+# that manifests (written without a lock here) are locked too; see
+# docs/design.md, "Object lock and rollback".
 
 # [[destination]]
 # name = "local"
