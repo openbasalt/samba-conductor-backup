@@ -13,7 +13,8 @@
 //   - Before the restore, the archive's smb.conf is only read by this
 //     package (never by Samba): a file that uses include, config backend,
 //     config file or registry shares refuses the restore, and only the
-//     workgroup is taken from it (checked). samba-tool gets a configuration
+//     workgroup and the "ad dc functional level" are taken from it (both
+//     checked). samba-tool gets a configuration
 //     generated here (`--configfile`), so it never loads the archive's.
 //   - After the restore, the smb.conf samba-tool wrote is checked against
 //     an allowlist (the parameters `make_smbconf` writes for a restored DC,
@@ -187,6 +188,11 @@ var (
 	pathRE = regexp.MustCompile(`^/[A-Za-z0-9._/+-]+$`)
 )
 
+// functionalLevels are the values of "ad dc functional level" Samba
+// accepts. A domain above 2008 R2 needs the parameter: Samba refuses to
+// start when it maps to a level below the domain's.
+var functionalLevels = map[string]bool{"2008_R2": true, "2012": true, "2012_R2": true, "2016": true}
+
 // Expect is what a restored DC's configuration must say.
 type Expect struct {
 	// NetbiosName of the restored DC (samba-tool's --newservername).
@@ -196,6 +202,9 @@ type Expect struct {
 	Realm     string
 	// TargetDir is samba-tool's --targetdir (absolute, clean).
 	TargetDir string
+	// FunctionalLevel is the backup's "ad dc functional level" (one of
+	// functionalLevels), or empty when the backup does not set it.
+	FunctionalLevel string
 }
 
 // Validate checks the expectation itself.
@@ -209,6 +218,8 @@ func (e Expect) Validate() error {
 		return fmt.Errorf("invalid realm %q", e.Realm)
 	case !pathRE.MatchString(e.TargetDir) || filepath.Clean(e.TargetDir) != e.TargetDir || strings.Contains(e.TargetDir, ".."):
 		return fmt.Errorf("invalid target directory %q", e.TargetDir)
+	case e.FunctionalLevel != "" && !functionalLevels[e.FunctionalLevel]:
+		return fmt.Errorf("invalid functional level %q", e.FunctionalLevel)
 	}
 	return nil
 }
@@ -216,11 +227,14 @@ func (e Expect) Validate() error {
 // global is the [global] allowlist with the value each parameter must
 // have: exactly what samba-tool's make_smbconf writes for a restored DC
 // (netbios name, workgroup, realm, server role and the five directories
-// under the target). Nothing else is needed to start the restored domain:
-// every other parameter keeps Samba's compiled-in default.
+// under the target), plus the domain's "ad dc functional level" when the
+// backup sets it (make_smbconf keeps it from the configuration samba-tool
+// loaded, and Samba does not start a domain above 2008 R2 without it).
+// Nothing else is needed to start the restored domain: every other
+// parameter keeps Samba's compiled-in default.
 func (e Expect) global() []Param {
 	t := e.TargetDir
-	return []Param{
+	ps := []Param{
 		{Key: "netbios name", Value: strings.ToUpper(e.NetbiosName)},
 		{Key: "workgroup", Value: strings.ToUpper(e.Workgroup)},
 		{Key: "realm", Value: strings.ToUpper(e.Realm)},
@@ -231,6 +245,10 @@ func (e Expect) global() []Param {
 		{Key: "cache directory", Value: filepath.Join(t, "cache")},
 		{Key: "binddns dir", Value: filepath.Join(t, "bind-dns")},
 	}
+	if e.FunctionalLevel != "" {
+		ps = append(ps, Param{Key: "ad dc functional level", Value: e.FunctionalLevel})
+	}
+	return ps
 }
 
 // shares are the two shares of a DC, with their paths.
@@ -275,26 +293,43 @@ func Generate(e Expect) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
+// BackupConf is what a restore takes from the backup's smb.conf.
+type BackupConf struct {
+	// Workgroup: the NetBIOS domain name (upper case).
+	Workgroup string
+	// FunctionalLevel: "ad dc functional level" in canonical spelling
+	// (one of 2008_R2, 2012, 2012_R2, 2016), or empty when not set.
+	FunctionalLevel string
+}
+
 // FromBackup reads the smb.conf found in a backup before the restore: it
 // refuses include, config backend, config file and registry shares, checks
-// that its realm is the expected one, and returns the workgroup (the only
-// value taken from it). Nothing else in the file is used.
-func FromBackup(b []byte, realm string) (workgroup string, err error) {
+// that its realm is the expected one, and returns the workgroup and the
+// "ad dc functional level" (the only values taken from it, both checked).
+// Nothing else in the file is used.
+func FromBackup(b []byte, realm string) (BackupConf, error) {
 	c, err := Parse(b)
 	if err != nil {
-		return "", err
+		return BackupConf{}, err
 	}
 	if r, _ := c.Get("realm"); !strings.EqualFold(r, realm) {
-		return "", &RefusedError{Reason: fmt.Sprintf("realm %q, the backup is of %q", r, realm)}
+		return BackupConf{}, &RefusedError{Reason: fmt.Sprintf("realm %q, the backup is of %q", r, realm)}
 	}
 	wg, n := c.Get("workgroup")
 	if n == 0 {
-		return "", &RefusedError{Reason: "no workgroup"}
+		return BackupConf{}, &RefusedError{Reason: "no workgroup"}
 	}
 	if !netbiosRE.MatchString(wg) {
-		return "", &RefusedError{Reason: fmt.Sprintf("workgroup %q is not a NetBIOS domain name this tool accepts", wg)}
+		return BackupConf{}, &RefusedError{Reason: fmt.Sprintf("workgroup %q is not a NetBIOS domain name this tool accepts", wg)}
 	}
-	return strings.ToUpper(wg), nil
+	out := BackupConf{Workgroup: strings.ToUpper(wg)}
+	if fl, n := c.Get("addcfunctionallevel"); n > 0 {
+		out.FunctionalLevel = strings.ToUpper(fl)
+		if !functionalLevels[out.FunctionalLevel] {
+			return BackupConf{}, &RefusedError{Reason: fmt.Sprintf("ad dc functional level %q is not one Samba accepts", fl)}
+		}
+	}
+	return out, nil
 }
 
 // Report says what Sanitize removed.

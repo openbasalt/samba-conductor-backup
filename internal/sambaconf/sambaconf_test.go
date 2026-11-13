@@ -166,15 +166,27 @@ func TestRefusedValues(t *testing.T) {
 
 func TestFromBackup(t *testing.T) {
 	dc := "# Global parameters\n[global]\n\tnetbios name = DC1\n\trealm = lab.test\n\tworkgroup = lab\n\tdns update command = /bin/sh\n"
-	wg, err := FromBackup([]byte(dc), "LAB.TEST")
-	if err != nil || wg != "LAB" {
-		t.Fatalf("workgroup %q %v", wg, err)
+	bc, err := FromBackup([]byte(dc), "LAB.TEST")
+	if err != nil || bc.Workgroup != "LAB" || bc.FunctionalLevel != "" {
+		t.Fatalf("from backup %+v %v", bc, err)
+	}
+	// The functional level is carried over (Samba refuses to start a
+	// 2012+ domain without it), in canonical spelling.
+	for in, want := range map[string]string{"2016": "2016", "2012_r2": "2012_R2", "2008_R2": "2008_R2", "2012": "2012"} {
+		bc, err := FromBackup([]byte(dc+"\tad dc functional level = "+in+"\n"), "LAB.TEST")
+		if err != nil || bc.FunctionalLevel != want {
+			t.Errorf("functional level %q: %+v %v", in, bc, err)
+		}
 	}
 	for _, bad := range []string{
 		strings.Replace(dc, "lab.test", "other.test", 1),
 		strings.Replace(dc, "workgroup = lab", "workgroup = %D", 1),
 		strings.Replace(dc, "workgroup = lab", "workgroup = A B", 1),
 		strings.Replace(dc, "\tworkgroup = lab\n", "", 1),
+		dc + "\tad dc functional level = 2016 /etc/hostname\n",
+		dc + "\tad dc functional level = %D\n",
+		dc + "\tad dc functional level = 2003\n",
+		dc + "\tad dc functional level = \n",
 	} {
 		if _, err := FromBackup([]byte(bad), "LAB.TEST"); err == nil {
 			t.Errorf("accepted:\n%s", bad)
@@ -182,8 +194,39 @@ func TestFromBackup(t *testing.T) {
 	}
 }
 
+// TestFunctionalLevel: a 2016 domain's restored smb.conf keeps "ad dc
+// functional level" (samba-tool's make_smbconf dumps it from the generated
+// configuration it loaded); without it Samba refuses to start ("maps to 4,
+// which is less than the domain functional level of 7").
+func TestFunctionalLevel(t *testing.T) {
+	e := lab
+	e.FunctionalLevel = "2016"
+	gen, err := Generate(e)
+	if err != nil || !strings.Contains(string(gen), "\tad dc functional level = 2016\n") {
+		t.Fatalf("generated (%v):\n%s", err, gen)
+	}
+	dumped := strings.Replace(restored, "\tbinddns dir", "\tad dc functional level = 2016\n\tbinddns dir", 1)
+	out, rep, err := Sanitize([]byte(dumped), e)
+	if err != nil || len(rep.Dropped) != 0 || !bytes.Equal(out, gen) {
+		t.Fatalf("restored with the level: %v %v\n%s", err, rep.Dropped, out)
+	}
+	// Missing or different: refused (the domain would not start, or would
+	// start at a level the backup did not have).
+	for _, conf := range []string{restored, strings.Replace(dumped, "= 2016", "= 2012", 1)} {
+		_, _, err := Sanitize([]byte(conf), e)
+		refused(t, err)
+	}
+	// Without a level in the backup, the parameter is not allowlisted.
+	_, rep, err = Sanitize([]byte(dumped), lab)
+	if err != nil || len(rep.Dropped) != 1 || rep.Dropped[0] != "global: ad dc functional level" {
+		t.Fatalf("no level expected: %v %v", rep.Dropped, err)
+	}
+}
+
 func TestExpectValidate(t *testing.T) {
 	for _, e := range []Expect{
+		{NetbiosName: "DRILL", Workgroup: "LAB", Realm: "LAB.TEST", TargetDir: "/t", FunctionalLevel: "2016\ninclude = /etc/hostname"},
+		{NetbiosName: "DRILL", Workgroup: "LAB", Realm: "LAB.TEST", TargetDir: "/t", FunctionalLevel: "2003"},
 		{NetbiosName: "-X", Workgroup: "LAB", Realm: "LAB.TEST", TargetDir: "/t"},
 		{NetbiosName: "DRILL", Workgroup: "LAB", Realm: "LAB", TargetDir: "/t"},
 		{NetbiosName: "DRILL", Workgroup: "LAB", Realm: "LAB.TEST", TargetDir: "t"},
@@ -352,8 +395,20 @@ func TestPrepareAndFinalize(t *testing.T) {
 		t.Fatalf("expect %+v", e)
 	}
 	gen, _ := os.ReadFile(cfg)
-	if !strings.Contains(string(gen), "private dir = "+target+"/private") || strings.Contains(string(gen), "DC1") {
+	if !strings.Contains(string(gen), "private dir = "+target+"/private") || strings.Contains(string(gen), "DC1") ||
+		strings.Contains(string(gen), "functional level") {
 		t.Fatalf("generated:\n%s", gen)
+	}
+	// A backup of a 2016 domain: the generated configuration carries the
+	// level, so samba-tool's restored smb.conf keeps it.
+	fl := goodMembers()
+	fl[2].body = backupConf + "\tad dc functional level = 2016\n"
+	e16, err := Prepare(writeBackup(t, tarBytes(t, fl, true)), filepath.Join(dir, "c16"), "drill", "lab.test", target)
+	if err != nil || e16.FunctionalLevel != "2016" {
+		t.Fatalf("2016 backup: %+v %v", e16, err)
+	}
+	if g16, _ := os.ReadFile(filepath.Join(dir, "c16")); !strings.Contains(string(g16), "\tad dc functional level = 2016\n") {
+		t.Fatalf("generated for 2016:\n%s", g16)
 	}
 	// A second Prepare does not overwrite (O_EXCL).
 	if _, err := Prepare(backup, cfg, "drill", "lab.test", target); err == nil {

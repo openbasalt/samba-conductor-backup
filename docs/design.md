@@ -226,8 +226,11 @@ writes the backup's sysvol into the `[sysvol]` path it names. So:
 - Before the restore, conductor-backup reads the backup's `etc/smb.conf`
   itself (Samba never loads it). `include`, `config backend`, `config file`
   or `registry shares` anywhere refuse the restore; the realm must be the
-  configured one; only the workgroup is taken from it (a NetBIOS domain
-  name: letters, digits, `.`, `_`, `-`, at most 15 characters).
+  configured one; only the workgroup (a NetBIOS domain name: letters,
+  digits, `.`, `_`, `-`, at most 15 characters) and the `ad dc functional
+  level` (one of `2008_R2`, `2012`, `2012_R2`, `2016`, when set) are taken
+  from it. Samba refuses to start a domain above 2008 R2 without that
+  level in its configuration.
 - samba-tool restores with a configuration generated from the allowlist
   below (`--configfile`): it copies that file over the backup's
   `etc/smb.conf` and keeps the backup's as `etc/smb.conf.orig`, which
@@ -249,6 +252,7 @@ parameter keeps Samba's compiled-in default:
 | | `realm` | the configured realm |
 | | `server role` | `active directory domain controller` |
 | | `private dir`, `lock dir`, `state directory`, `cache directory`, `binddns dir` | `TARGET/private`, `TARGET`, `TARGET/state`, `TARGET/cache`, `TARGET/bind-dns` |
+| | `ad dc functional level` | the backup's level (checked as above), only when the backup sets it; `make_smbconf` keeps it from the configuration samba-tool loaded |
 | `[sysvol]` | `path`, `read only` | `TARGET/state/sysvol`, `no` |
 | `[netlogon]` | `path`, `read only` | `TARGET/state/sysvol/<realm>/scripts`, `no` |
 

@@ -183,8 +183,8 @@ func (o RestoreOp) Command() (sambatool.Command, error) {
 	return c, nil
 }
 
-// Prepare scans a Samba backup file, reads the workgroup from its
-// smb.conf and writes the configuration samba-tool restores with
+// Prepare scans a Samba backup file, reads the workgroup and the
+// functional level from its smb.conf and writes the configuration samba-tool restores with
 // (configPath, a new 0600 file). It returns the expectation Sanitize
 // checks the restored configuration against.
 func Prepare(backupFile, configPath, netbiosName, realm, targetDir string) (Expect, error) {
@@ -192,11 +192,12 @@ func Prepare(backupFile, configPath, netbiosName, realm, targetDir string) (Expe
 	if err != nil {
 		return Expect{}, err
 	}
-	wg, err := FromBackup(raw, realm)
+	bc, err := FromBackup(raw, realm)
 	if err != nil {
 		return Expect{}, err
 	}
-	e := Expect{NetbiosName: strings.ToUpper(netbiosName), Workgroup: wg, Realm: strings.ToUpper(realm), TargetDir: targetDir}
+	e := Expect{NetbiosName: strings.ToUpper(netbiosName), Workgroup: bc.Workgroup, Realm: strings.ToUpper(realm), TargetDir: targetDir,
+		FunctionalLevel: bc.FunctionalLevel}
 	conf, err := Generate(e)
 	if err != nil {
 		return Expect{}, err

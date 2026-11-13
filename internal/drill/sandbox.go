@@ -54,11 +54,15 @@ type SandboxSpec struct {
 	ConfigFile string `json:"config_file"`
 	// Workgroup is the NetBIOS domain name the restored smb.conf must carry.
 	Workgroup string `json:"workgroup"`
+	// FunctionalLevel is the backup's "ad dc functional level" (empty when
+	// the backup does not set it).
+	FunctionalLevel string `json:"functional_level,omitempty"`
 }
 
 // expect is what the restored smb.conf must say.
 func (s SandboxSpec) expect() sambaconf.Expect {
-	return sambaconf.Expect{NetbiosName: s.ServerName, Workgroup: s.Workgroup, Realm: s.Realm, TargetDir: s.TargetDir}
+	return sambaconf.Expect{NetbiosName: s.ServerName, Workgroup: s.Workgroup, Realm: s.Realm, TargetDir: s.TargetDir,
+		FunctionalLevel: s.FunctionalLevel}
 }
 
 // SandboxResult is what the sandbox prints on stdout.

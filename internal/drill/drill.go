@@ -386,9 +386,12 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	if err != nil {
 		return finish(err)
 	}
-	spec.Workgroup = expect.Workgroup
-	rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "config", OK: true,
-		Detail: "backup scanned; smb.conf generated (workgroup " + expect.Workgroup + ")"})
+	spec.Workgroup, spec.FunctionalLevel = expect.Workgroup, expect.FunctionalLevel
+	detail := "backup scanned; smb.conf generated (workgroup " + expect.Workgroup
+	if expect.FunctionalLevel != "" {
+		detail += ", functional level " + expect.FunctionalLevel
+	}
+	rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "config", OK: true, Detail: detail + ")"})
 	specPath := filepath.Join(work, "sandbox.json")
 	if err := state.WriteJSON(specPath, spec); err != nil {
 		return finish(err)

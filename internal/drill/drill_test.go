@@ -96,7 +96,8 @@ func (f *fixture) sambaFile() []byte {
 	if f.samba != nil {
 		return f.samba
 	}
-	return sambaBackup("")
+	// A 2016 domain, as the lab's: the level must reach the sandbox.
+	return sambaBackup("\tad dc functional level = 2016\n")
 }
 
 // sambaBackup is a minimal Samba backup file (tar; samba-tool and the
@@ -143,8 +144,11 @@ func TestDrillOnRequest(t *testing.T) {
 		t.Fatalf("report %+v", rep.Drill)
 	}
 	if f.spec.ProbeUser != "svc-drill-probe" || f.spec.Users.Max != 3 || len(f.spec.Samples) != 1 || f.spec.ServerName != "DRILL" ||
-		f.spec.Workgroup != "LAB" || filepath.Base(f.spec.ConfigFile) != "restore-smb.conf" {
+		f.spec.Workgroup != "LAB" || f.spec.FunctionalLevel != "2016" || filepath.Base(f.spec.ConfigFile) != "restore-smb.conf" {
 		t.Fatalf("spec %+v", f.spec)
+	}
+	if c := rep.Drill.Checks[1]; c.Name != "config" || !strings.Contains(c.Detail, "functional level 2016") {
+		t.Fatalf("config check %+v", c)
 	}
 	// Plaintext removed.
 	if entries, _ := os.ReadDir(f.d.Cfg.Drill.WorkDir); len(entries) > 3 {
