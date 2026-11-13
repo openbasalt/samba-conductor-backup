@@ -22,6 +22,7 @@ import (
 	"github.com/openbasalt/samba-conductor-backup/internal/archive"
 	"github.com/openbasalt/samba-conductor-backup/internal/dest"
 	"github.com/openbasalt/samba-conductor-backup/internal/runner"
+	"github.com/openbasalt/samba-conductor-backup/internal/sambaconf"
 	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
@@ -44,6 +45,14 @@ type Options struct {
 	WithConductorState bool
 	ConductorDB        string
 	SambaTool          string
+	// Seen are high-water marks this host keeps (the newest backup a DC
+	// made or a drill host saw): "latest" is refused when the newest
+	// backup in the destination is older than any of them, unless
+	// AcceptOlder.
+	Seen        []runner.Mark
+	AcceptOlder bool
+	// Now is the clock (tests).
+	Now func() time.Time
 }
 
 // Result describes what was restored.
@@ -84,6 +93,11 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	b, err := runner.Latest(list, id)
 	if err != nil {
 		return nil, err
+	}
+	if id == "" {
+		if err := checkLatest(b, o, log); err != nil {
+			return nil, err
+		}
 	}
 	fmt.Fprintf(log, "backup %s from %s (%d bytes, sha256 %s)\n", b.ID, s.Name(), b.Manifest.Size, b.Manifest.SHA256)
 	if err := os.MkdirAll(o.Target, 0o700); err != nil {
@@ -148,8 +162,15 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 		tool = "/usr/bin/samba-tool"
 	}
 	r := &sambatool.Runner{Binary: tool, Credentials: sambatool.LocalSystem{}, Timeout: 2 * time.Hour}
-	op := sambatool.DomainBackupRestore{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)), TargetDir: sambaDir,
-		NewServerName: name, HostIP: o.HostIP}
+	// The backup's smb.conf is never loaded: samba-tool restores with a
+	// configuration generated from the allowlist (internal/sambaconf), after
+	// the backup file was scanned for links and names leaving the target.
+	op := sambaconf.RestoreOp{DomainBackupRestore: sambatool.DomainBackupRestore{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)),
+		TargetDir: sambaDir, NewServerName: name, HostIP: o.HostIP}, ConfigFile: filepath.Join(work, "restore-smb.conf")}
+	expect, err := sambaconf.Prepare(op.BackupFile, op.ConfigFile, name, o.Realm, sambaDir)
+	if err != nil {
+		return nil, err
+	}
 	cmdline, err := sambatool.Preview(r, op)
 	if err != nil {
 		return nil, err
@@ -159,6 +180,13 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 		return nil, err
 	}
 	_ = archive.Shred(op.BackupFile)
+	conf, err := sambaconf.Finalize(expect)
+	if err != nil {
+		return nil, fmt.Errorf("restored smb.conf: %w", err)
+	}
+	if len(conf.Dropped) > 0 {
+		fmt.Fprintf(log, "restored smb.conf: dropped %s\n", strings.Join(conf.Dropped, ", "))
+	}
 	res := &Result{Meta: meta, BackupID: b.ID, ServerName: name, SambaDir: sambaDir, FilesDir: filepath.Join(o.Target, "files")}
 
 	// Host files (configs, TLS) next to the restored domain.
@@ -176,7 +204,8 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 		}
 		srcFile := filepath.Join(res.FilesDir, filepath.FromSlash(strings.TrimPrefix(t.Member, helper.ArchiveFilesDir)))
 		dst := filepath.Join(sambaDir, "private", filepath.FromSlash(t.Value))
-		if err := copyFile(srcFile, dst, tlsMode(t.Param)); err != nil {
+		// sambaDir came out of the backup: nothing under it is followed.
+		if err := copyInto(srcFile, sambaDir, "private/"+t.Value, tlsMode(t.Param), nil); err != nil {
 			fmt.Fprintf(log, "warning: TLS %s not placed: %v\n", t.Param, err)
 			continue
 		}
@@ -185,7 +214,7 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	if meta.ConductorDB {
 		dbSrc := filepath.Join(plain, filepath.FromSlash(helper.ArchiveConductorDB))
 		dbDst := filepath.Join(o.Target, "conductor", "conductor.db")
-		if err := copyFile(dbSrc, dbDst, 0o600); err != nil {
+		if err := copyInto(dbSrc, o.Target, "conductor/conductor.db", 0o600, nil); err != nil {
 			return nil, err
 		}
 		res.Conductor = dbDst
@@ -201,6 +230,38 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	return res, nil
 }
 
+// staleAfter: "latest" older than this gets a warning.
+const staleAfter = 26 * time.Hour
+
+// checkLatest prints what "latest" resolved to and refuses it when a
+// high-water mark of this host names a newer backup (newer backups were
+// removed from the destination), unless the operator accepts it.
+func checkLatest(b runner.Listed, o Options, log io.Writer) error {
+	now := time.Now()
+	if o.Now != nil {
+		now = o.Now()
+	}
+	at := b.Manifest.CreatedAt
+	age := now.Sub(at).Round(time.Minute)
+	fmt.Fprintf(log, "latest: %s, created %s (%s ago)\n", b.ID, at.UTC().Format(time.RFC3339), age)
+	if age > staleAfter {
+		fmt.Fprintf(log, "WARNING: the newest backup in this destination is %s old. If newer backups should exist, they may have been\n"+
+			"deleted: compare with `conductor-backup list` on other destinations and the DC's status before restoring.\n", age)
+	}
+	cur := []runner.Listed{b}
+	for _, m := range o.Seen {
+		m := m
+		if _, err := runner.CheckRollback(cur, &m); err != nil {
+			if o.AcceptOlder {
+				fmt.Fprintf(log, "WARNING: %v (accepted with --accept-older)\n", err)
+				continue
+			}
+			return fmt.Errorf("%w; restore that backup by its ID, or pass --accept-older", err)
+		}
+	}
+	return nil
+}
+
 func tlsMode(param string) os.FileMode {
 	if param == "keyfile" {
 		return 0o600
@@ -208,36 +269,23 @@ func tlsMode(param string) os.FileMode {
 	return 0o644
 }
 
+// exists reports whether p is there (without following a final link).
 func exists(p string) bool {
-	_, err := os.Stat(p)
+	_, err := os.Lstat(p)
 	return err == nil
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
-}
-
 // installConductorDB puts the database in place for the conductor user,
-// keeping any database already there.
+// keeping any database already there. The directory belongs to the
+// conductor user, so nothing in it is followed: the old files are renamed
+// inside it, the new one is written to a fresh file, owned through its
+// descriptor and renamed into place.
 func installConductorDB(src, dst string) (string, error) {
 	if dst == "" {
 		dst = "/var/lib/conductor/conductor.db"
+	}
+	if !filepath.IsAbs(dst) || filepath.Clean(dst) != dst {
+		return "", errors.New("the conductor database path must be a clean absolute path")
 	}
 	u, err := user.Lookup("conductor")
 	if err != nil {
@@ -245,27 +293,32 @@ func installConductorDB(src, dst string) (string, error) {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+	dir, base := filepath.Dir(dst), filepath.Base(dst)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	if exists(dst) {
-		keep := dst + ".pre-restore-" + time.Now().UTC().Format("20060102T150405Z")
-		if err := os.Rename(dst, keep); err != nil {
+	root, err := openDirRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := root.Lstat(base); err == nil {
+		keep := base + ".pre-restore-" + time.Now().UTC().Format("20060102T150405Z")
+		if err := root.Rename(base, keep); err != nil {
 			return "", err
 		}
 		for _, sfx := range []string{"-wal", "-shm"} {
-			if exists(dst + sfx) {
-				_ = os.Rename(dst+sfx, keep+sfx)
+			if _, err := root.Lstat(base + sfx); err == nil {
+				_ = root.Rename(base+sfx, keep+sfx)
 			}
 		}
 	}
-	if err := copyFile(src, dst, 0o600); err != nil {
+	if err := copyInto(src, dir, base, 0o600, &owner{uid: uid, gid: gid}); err != nil {
 		return "", err
 	}
-	if err := os.Chown(dst, uid, gid); err != nil {
+	if err := os.Lchown(dir, uid, gid); err != nil {
 		return "", err
 	}
-	_ = os.Chown(filepath.Dir(dst), uid, gid)
 	return dst, nil
 }
 
@@ -281,6 +334,8 @@ func NextSteps(r *Result) string {
 	b.WriteString("Next steps (full-forest recovery, conductor/docs/restore.md):\n")
 	fmt.Fprintf(&b, "  1. Make sure no old DC of %s is running on the network.\n", r.Meta.Realm)
 	fmt.Fprintf(&b, "  2. Use the restored configuration:\n       systemctl stop samba-ad-dc\n       mv /etc/samba/smb.conf /etc/samba/smb.conf.pre-restore\n       ln -s %s/etc/smb.conf /etc/samba/smb.conf\n       cp %s/private/krb5.conf /etc/krb5.conf\n", r.SambaDir, r.SambaDir)
+	fmt.Fprintf(&b, "     It holds only the parameters a restored DC needs. The backup's own smb.conf is kept, unused, as\n"+
+		"     %s/etc/smb.conf.orig: review it and copy the parameters you need (TLS files, DNS forwarder) one by one.\n", r.SambaDir)
 	if len(r.TLSPlaced) > 0 {
 		fmt.Fprintf(&b, "  3. TLS: the old DC's certificate files were put back (%s); issue one for %s.%s from your CA and replace them\n",
 			strings.Join(r.TLSPlaced, ", "), strings.ToLower(r.ServerName), domain)

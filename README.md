@@ -51,11 +51,14 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
 - Restore (`restore`): a real AD restore with `samba-tool domain backup
   restore` (original SIDs and GUIDs, FSMO roles seized, old DCs removed,
   krbtgt renewed), after checking the download against the signed manifest,
-  and the exact next steps.
+  and the exact next steps. The backup's own `smb.conf` is never loaded:
+  samba-tool restores with an allowlisted configuration (see
+  [docs/design.md](docs/design.md#what-a-backup-can-make-the-restoring-host-do)).
 - Restore drills (`drill`, on a drill host, never a DC): the newest backup
   is restored into a sandbox with no network (new network, mount, PID,
-  UTS and IPC namespaces; loopback and a dummy interface only), started,
-  and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
+  UTS and IPC namespaces; loopback and a dummy interface only), a minimal
+  root of its own (no credentials in it), reduced capabilities,
+  `no_new_privs` and a seccomp filter, started, and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
   probe account works, the user count matches the source, sample SIDs are
   unchanged. The plaintext is shredded, the measured restore time (RTO) and
   every check go into a signed report that conductor shows and audits.
@@ -229,8 +232,8 @@ conductor-backup status [--json]
 conductor-backup list [--destination N]
 conductor-backup verify ID|latest           # download + SHA-256, no decryption
 conductor-backup prune [--dry-run]
-conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP]
-conductor-backup drill [--now] [--backup ID]
+conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP] [--accept-older]
+conductor-backup drill [--now] [--backup ID] [--accept-older]
 conductor-backup keygen signing|age --out FILE
 conductor-backup pubkey FILE
 ```

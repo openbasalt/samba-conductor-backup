@@ -29,6 +29,8 @@ type fixture struct {
 	drillID *age.X25519Identity
 	now     time.Time
 	spec    SandboxSpec
+	// samba replaces the Samba backup file of the next putBackup.
+	samba []byte
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -71,7 +73,7 @@ func (f *fixture) putBackup(t *testing.T, id string, to age.Recipient) {
 	for _, m := range []struct {
 		n string
 		b []byte
-	}{{helper.ArchiveMetaName, meta}, {"samba/samba-backup.tar.bz2", []byte("BZh9")}} {
+	}{{helper.ArchiveMetaName, meta}, {"samba/samba-backup.tar.bz2", f.sambaFile()}} {
 		_ = tw.WriteHeader(&tar.Header{Name: m.n, Mode: 0o600, Size: int64(len(m.b)), Typeflag: tar.TypeReg})
 		_, _ = tw.Write(m.b)
 	}
@@ -84,9 +86,31 @@ func (f *fixture) putBackup(t *testing.T, id string, to age.Recipient) {
 	if err := f.store.PutFile(ctx, dest.ArchiveKey("LAB.TEST", id), p, size, sum, md); err != nil {
 		t.Fatal(err)
 	}
+	created, _ := time.Parse("20060102T150405Z", strings.SplitN(id, "-", 2)[0])
 	env, _ := sign.Seal(f.dcKey, manifest.Manifest{Format: manifest.ManifestFormat, ID: id, Realm: "LAB.TEST", DC: "dc1", Size: size, SHA256: sum,
-		Object: dest.ArchiveKey("LAB.TEST", id)})
+		Object: dest.ArchiveKey("LAB.TEST", id), CreatedAt: created})
 	_ = f.store.PutBytes(ctx, dest.ManifestKey("LAB.TEST", id), env)
+}
+
+func (f *fixture) sambaFile() []byte {
+	if f.samba != nil {
+		return f.samba
+	}
+	// A 2016 domain, as the lab's: the level must reach the sandbox.
+	return sambaBackup("\tad dc functional level = 2016\n")
+}
+
+// sambaBackup is a minimal Samba backup file (tar; samba-tool and the
+// scan detect the compression).
+func sambaBackup(extra string) []byte {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	conf := []byte("[global]\n\tnetbios name = DC1\n\trealm = LAB.TEST\n\tworkgroup = LAB\n" + extra)
+	_ = tw.WriteHeader(&tar.Header{Name: "./etc", Mode: 0o755, Typeflag: tar.TypeDir})
+	_ = tw.WriteHeader(&tar.Header{Name: "./etc/smb.conf", Mode: 0o644, Size: int64(len(conf)), Typeflag: tar.TypeReg})
+	_, _ = tw.Write(conf)
+	_ = tw.Close()
+	return buf.Bytes()
 }
 
 func (f *fixture) request(t *testing.T, id string, key sign.PrivateKey) {
@@ -119,8 +143,12 @@ func TestDrillOnRequest(t *testing.T) {
 	if rep.Drill.BackupID != "20261003T023000Z-dc1" || !rep.Drill.Passed || rep.Drill.RequestID != "req-1" || rep.Drill.RTOMS < 2300 {
 		t.Fatalf("report %+v", rep.Drill)
 	}
-	if f.spec.ProbeUser != "svc-drill-probe" || f.spec.Users.Max != 3 || len(f.spec.Samples) != 1 || f.spec.ServerName != "DRILL" {
+	if f.spec.ProbeUser != "svc-drill-probe" || f.spec.Users.Max != 3 || len(f.spec.Samples) != 1 || f.spec.ServerName != "DRILL" ||
+		f.spec.Workgroup != "LAB" || f.spec.FunctionalLevel != "2016" || filepath.Base(f.spec.ConfigFile) != "restore-smb.conf" {
 		t.Fatalf("spec %+v", f.spec)
+	}
+	if c := rep.Drill.Checks[1]; c.Name != "config" || !strings.Contains(c.Detail, "functional level 2016") {
+		t.Fatalf("config check %+v", c)
 	}
 	// Plaintext removed.
 	if entries, _ := os.ReadDir(f.d.Cfg.Drill.WorkDir); len(entries) > 3 {
@@ -177,5 +205,61 @@ func TestDrillFailures(t *testing.T) {
 	rep, err = f.d.Run(ctx, Options{Force: true})
 	if err == nil || rep.Drill.Passed || rep.Drill.RTOMS != 0 {
 		t.Fatalf("failed check: %v %+v", err, rep.Drill)
+	}
+}
+
+// TestDrillRefusesHostileConfig: a backup whose smb.conf pulls in other
+// configuration fails the drill before the sandbox starts, with the reason
+// in the report.
+func TestDrillRefusesHostileConfig(t *testing.T) {
+	f := newFixture(t)
+	called := false
+	f.d.sandbox = func(context.Context, string, string, string, io.Writer) (SandboxResult, error) {
+		called = true
+		return SandboxResult{}, nil
+	}
+	f.samba = sambaBackup("\tconfig backend = registry\n")
+	f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
+	rep, err := f.d.Run(context.Background(), Options{Force: true})
+	if err == nil || rep.Drill.Passed || called || !strings.Contains(rep.Drill.Error, "config backend") {
+		t.Fatalf("hostile smb.conf: %v %+v (sandbox called: %v)", err, rep.Drill, called)
+	}
+}
+
+// TestDrillRollback: when newer backups disappear from the bucket, drills
+// of "the newest backup" are refused until the operator accepts it.
+func TestDrillRollback(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.putBackup(t, "20261002T023000Z-dc1", f.drillID.Recipient())
+	f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
+	if rep, err := f.d.Run(ctx, Options{Force: true}); err != nil || rep.Drill.BackupID != "20261003T023000Z-dc1" {
+		t.Fatalf("first drill: %v", err)
+	}
+	// A bucket writer deletes the newest backup's manifest.
+	if err := f.store.Delete(ctx, dest.ManifestKey("LAB.TEST", "20261003T023000Z-dc1")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.d.Run(ctx, Options{Force: true})
+	if err == nil || rep.Drill.Passed || !strings.Contains(rep.Drill.Error, "possible rollback") {
+		t.Fatalf("rollback drilled: %v %+v", err, rep.Drill)
+	}
+	// A scheduled run without a request reports it too.
+	if _, err := f.d.Run(ctx, Options{}); err == nil || !strings.Contains(err.Error(), "possible rollback") {
+		t.Fatalf("scheduled run: %v", err)
+	}
+	// An explicit backup is still drilled.
+	if rep, err := f.d.Run(ctx, Options{Force: true, BackupID: "20261002T023000Z-dc1"}); err != nil || !rep.Drill.Passed {
+		t.Fatalf("explicit backup: %v", err)
+	}
+	// The operator accepts the older backup: the mark is reset.
+	if rep, err := f.d.Run(ctx, Options{Force: true, AcceptOlder: true}); err != nil || rep.Drill.BackupID != "20261002T023000Z-dc1" {
+		t.Fatalf("accepted: %v", err)
+	}
+	if rep, err := f.d.Run(ctx, Options{Force: true}); err != nil || !rep.Drill.Passed {
+		t.Fatalf("after accepting: %v", err)
+	}
+	if m, err := ReadMark(f.d.Cfg.Drill.WorkDir); err != nil || m == nil || m.ID != "20261002T023000Z-dc1" {
+		t.Fatalf("mark %v %v", m, err)
 	}
 }

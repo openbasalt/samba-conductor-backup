@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"filippo.io/age"
@@ -31,6 +32,7 @@ import (
 	"github.com/openbasalt/samba-conductor-backup/internal/dest"
 	"github.com/openbasalt/samba-conductor-backup/internal/manifest"
 	"github.com/openbasalt/samba-conductor-backup/internal/runner"
+	"github.com/openbasalt/samba-conductor-backup/internal/sambaconf"
 	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 	"github.com/openbasalt/samba-conductor-backup/internal/state"
 )
@@ -61,6 +63,10 @@ type Options struct {
 	Force bool
 	// BackupID drills a specific backup (with Force).
 	BackupID string
+	// AcceptOlder accepts that the newest backup in the bucket is older
+	// than one this host has seen (see runner.CheckRollback) and resets
+	// the high-water mark to it.
+	AcceptOlder bool
 }
 
 // hostState is the drill host's bookkeeping (<work_dir>/drill-state.json).
@@ -69,6 +75,10 @@ type hostState struct {
 	LastReport       *manifest.DrillReport `json:"last_report,omitempty"`
 	WatchdogSentAt   time.Time             `json:"watchdog_sent_at"`
 	FailureAlertSent time.Time             `json:"failure_alert_sent"`
+	// NewestSeen is the newest usable backup this host has seen (the
+	// high-water mark that detects deleted newer backups).
+	NewestSeen        *runner.Mark `json:"newest_seen,omitempty"`
+	RollbackAlertSent time.Time    `json:"rollback_alert_sent"`
 }
 
 func (d *Drill) now() time.Time {
@@ -103,6 +113,7 @@ func (d *Drill) Run(ctx context.Context, opts Options) (*manifest.DrillReport, e
 		return nil, fmt.Errorf("listing backups: %w", err)
 	}
 	d.watchdog(ctx, list, &hs)
+	rollback := d.checkRollback(ctx, list, &hs, opts.AcceptOlder)
 
 	var req *manifest.DrillRequest
 	if !opts.Force {
@@ -111,6 +122,9 @@ func (d *Drill) Run(ctx context.Context, opts Options) (*manifest.DrillReport, e
 			return nil, err
 		}
 		if req == nil {
+			if rollback != nil {
+				return nil, rollback
+			}
 			return nil, ErrNothingToDo
 		}
 	}
@@ -118,7 +132,7 @@ func (d *Drill) Run(ctx context.Context, opts Options) (*manifest.DrillReport, e
 	if req != nil {
 		backupID = req.BackupID
 	}
-	rep := d.drill(ctx, list, backupID, req)
+	rep := d.drill(ctx, list, backupID, req, rollback)
 	if req != nil {
 		hs.Handled = append(hs.Handled, req.ID)
 		if len(hs.Handled) > 200 {
@@ -216,6 +230,48 @@ func (d *Drill) watchdog(ctx context.Context, list []runner.Listed, hs *hostStat
 	}
 }
 
+// ReadMark returns the high-water mark kept in a drill host's work
+// directory (nil when there is none), for `restore` on the same host.
+func ReadMark(workDir string) (*runner.Mark, error) {
+	var hs hostState
+	if err := state.ReadJSON(filepath.Join(workDir, "drill-state.json"), &hs); err != nil {
+		return nil, err
+	}
+	return hs.NewestSeen, nil
+}
+
+// checkRollback updates the high-water mark and alerts (at most once a
+// day) when the newest usable backup went backwards. It returns the
+// rollback error, or nil (also when the operator accepted it).
+func (d *Drill) checkRollback(ctx context.Context, list []runner.Listed, hs *hostState, accept bool) error {
+	mark, err := runner.CheckRollback(list, hs.NewestSeen)
+	if err != nil && accept {
+		d.Log.Warn("accepting an older newest backup (--accept-older)", "err", err)
+		mark, err = nil, nil
+		if newest, ok := runner.NewestUsable(list); ok {
+			mark = &runner.Mark{ID: newest.ID, CreatedAt: newest.Manifest.CreatedAt}
+		}
+	}
+	hs.NewestSeen = mark
+	if err == nil {
+		hs.RollbackAlertSent = time.Time{}
+		return nil
+	}
+	d.Log.Error("backups went backwards", "err", err)
+	if d.Alerts != nil && d.Alerts.Enabled() && d.now().Sub(hs.RollbackAlertSent) >= 24*time.Hour {
+		m := alert.Message{Kind: helper.AlertStale, Realm: strings.ToUpper(d.Cfg.Realm), Host: hostName(), At: d.now(),
+			Subject: fmt.Sprintf("[conductor-backup] %s: newer backups disappeared from the bucket (seen from the drill host)", strings.ToUpper(d.Cfg.Realm)),
+			Text: err.Error() + "\nDrills of the newest backup are refused until this is explained. If the backups were removed on purpose, run\n" +
+				"`conductor-backup drill --now --accept-older` on the drill host.\n"}
+		if aerr := d.Alerts.Send(ctx, m); aerr == nil {
+			hs.RollbackAlertSent = d.now()
+		} else {
+			d.Log.Error("sending the alert", "err", aerr)
+		}
+	}
+	return err
+}
+
 var hostRE = regexp.MustCompile(`[^a-z0-9-]+`)
 
 func hostName() string {
@@ -233,7 +289,7 @@ func hostName() string {
 
 // drill restores one backup and checks it. It never returns without a
 // report; the plaintext is shredded whatever happens.
-func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string, req *manifest.DrillRequest) *manifest.DrillReport {
+func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string, req *manifest.DrillRequest, rollback error) *manifest.DrillReport {
 	start := d.now()
 	rep := &manifest.DrillReport{Format: manifest.ReportFormat, Realm: strings.ToUpper(d.Cfg.Realm), Version: d.Version, Phases: map[string]int64{},
 		Drill: helper.DrillRecord{ID: start.Format("20060102T150405Z") + "-" + hostName(), Host: hostName(), StartedAt: start}}
@@ -260,6 +316,11 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(d.Cfg.Drill.TimeoutMinutes)*time.Minute)
 	defer cancel()
 
+	if backupID == "" && rollback != nil {
+		// "The newest backup" is not the newest any more: drilling it would
+		// report an old domain as restorable.
+		return finish(rollback)
+	}
 	b, err := runner.Latest(list, backupID)
 	if err != nil {
 		return finish(err)
@@ -314,16 +375,28 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 		return finish(errors.New("drill.probe_user is not configured"))
 	}
 
-	// Restore, start and check in the sandbox.
+	// The backup's own smb.conf is never used: scan the Samba backup file
+	// (no links, devices or names leaving the target) and generate the
+	// configuration samba-tool restores with (internal/sambaconf).
 	spec := SandboxSpec{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)), TargetDir: filepath.Join(work, "restore"),
-		WorkDir: work, ServerName: d.Cfg.Drill.ServerName, Realm: strings.ToUpper(d.Cfg.Realm), ProbeUser: d.Cfg.Drill.ProbeUser,
+		WorkDir: work, ServerName: strings.ToUpper(d.Cfg.Drill.ServerName), Realm: strings.ToUpper(d.Cfg.Realm), ProbeUser: d.Cfg.Drill.ProbeUser,
 		Samples: meta.Samples, Users: meta.Users, SambaBinary: d.Cfg.Drill.SambaBinary, SambaTool: d.Cfg.Drill.SambaTool,
-		TimeoutSeconds: d.Cfg.Drill.TimeoutMinutes * 60}
+		TimeoutSeconds: d.Cfg.Drill.TimeoutMinutes * 60, ConfigFile: filepath.Join(work, "restore-smb.conf")}
+	expect, err := sambaconf.Prepare(spec.BackupFile, spec.ConfigFile, spec.ServerName, spec.Realm, spec.TargetDir)
+	if err != nil {
+		return finish(err)
+	}
+	spec.Workgroup, spec.FunctionalLevel = expect.Workgroup, expect.FunctionalLevel
+	detail := "backup scanned; smb.conf generated (workgroup " + expect.Workgroup
+	if expect.FunctionalLevel != "" {
+		detail += ", functional level " + expect.FunctionalLevel
+	}
+	rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "config", OK: true, Detail: detail + ")"})
 	specPath := filepath.Join(work, "sandbox.json")
 	if err := state.WriteJSON(specPath, spec); err != nil {
 		return finish(err)
 	}
-	logw, err := os.OpenFile(filepath.Join(d.Cfg.Drill.WorkDir, "sandbox.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logw, err := os.OpenFile(filepath.Join(d.Cfg.Drill.WorkDir, "sandbox.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return finish(err)
 	}

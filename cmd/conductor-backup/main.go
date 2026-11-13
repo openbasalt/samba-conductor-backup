@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -59,10 +60,11 @@ privileged part):
 
 Anywhere you can read the bucket (as root, with the offline key):
   restore ID|latest --identity FILE --target DIR --newservername NAME
-          [--with-conductor-state] [--host-ip IP] [--destination N]
+          [--with-conductor-state] [--host-ip IP] [--destination N] [--accept-older]
 
 On a drill host (root; never on a DC):
-  drill [--now] [--backup ID]  run a requested (or forced) restore drill
+  drill [--now] [--backup ID] [--accept-older]
+                              run a requested (or forced) restore drill
 
 Keys:
   keygen signing --out FILE   signing key (prints the public key)
@@ -71,6 +73,15 @@ Keys:
 
 Global: --config FILE (default /etc/conductor-backup/conductor-backup.toml)
 `
+
+// The drill sandbox confines its main thread and starts every child from
+// it (internal/drill/confine.go): lock the main goroutine to the main
+// thread before main runs.
+func init() {
+	if len(os.Args) > 1 && os.Args[1] == "drill-sandbox" {
+		runtime.LockOSThread()
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -455,6 +466,7 @@ func cmdRestore(ctx context.Context, args []string) error {
 	name := fs.String("newservername", "", "NetBIOS name of the restored DC (required; not the name of an old DC)")
 	hostIP := fs.String("host-ip", "", "IPv4 address of the restored DC (optional)")
 	only := fs.String("destination", "", "destination to restore from (default: the first)")
+	acceptOlder := fs.Bool("accept-older", false, "restore latest even when this host has seen a newer backup (newer ones were removed)")
 	pos := parse(fs, args)
 	if len(pos) != 1 || *identity == "" || *target == "" || *name == "" {
 		return errors.New("usage: restore ID|latest --identity FILE --target DIR --newservername NAME")
@@ -472,7 +484,8 @@ func cmdRestore(ctx context.Context, args []string) error {
 		return err
 	}
 	res, err := restore.Run(ctx, ss[0], runner.TrustedBackupKeys(cfg), restore.Options{Realm: cfg.Realm, BackupID: pos[0], Identities: ids,
-		Target: *target, NewServerName: *name, HostIP: *hostIP, WithConductorState: *withState}, os.Stdout)
+		Target: *target, NewServerName: *name, HostIP: *hostIP, WithConductorState: *withState, Seen: localMarks(cfg),
+		AcceptOlder: *acceptOlder}, os.Stdout)
 	if err != nil {
 		return err
 	}
@@ -480,10 +493,30 @@ func cmdRestore(ctx context.Context, args []string) error {
 	return nil
 }
 
+// localMarks are the high-water marks this host keeps: the newest good
+// backup a DC made (its state directory) and the newest backup a drill
+// host saw (its work directory). Missing or unreadable ones are skipped.
+func localMarks(cfg *config.Config) []runner.Mark {
+	var out []runner.Mark
+	if st, err := (state.Dir{Path: cfg.StateDir}).LoadStatus(); err == nil {
+		for _, b := range st.Backups {
+			if b.Status == helper.StatusOK {
+				out = append(out, runner.Mark{ID: b.ID, CreatedAt: b.CreatedAt})
+				break
+			}
+		}
+	}
+	if m, err := drill.ReadMark(cfg.Drill.WorkDir); err == nil && m != nil {
+		out = append(out, *m)
+	}
+	return out
+}
+
 func cmdDrill(ctx context.Context, log *slog.Logger, args []string) error {
 	fs, path := flags("drill")
 	now := fs.Bool("now", false, "drill the newest backup now (without a request)")
 	backup := fs.String("backup", "", "with --now: this backup")
+	acceptOlder := fs.Bool("accept-older", false, "accept that the newest backup is older than one seen before (newer ones were removed)")
 	parse(fs, args)
 	cfg, err := config.Load(*path)
 	if err != nil {
@@ -526,7 +559,7 @@ func cmdDrill(ctx context.Context, log *slog.Logger, args []string) error {
 	}
 	d := &drill.Drill{Cfg: cfg, Store: ss[0], Trusted: trusted, Key: key, Identities: ids, ProbePassword: strings.TrimRight(string(pw), "\r\n"),
 		Alerts: alert.New(cfg), Log: log, Version: version, Exe: exe}
-	rep, err := d.Run(ctx, drill.Options{Force: *now, BackupID: *backup})
+	rep, err := d.Run(ctx, drill.Options{Force: *now, BackupID: *backup, AcceptOlder: *acceptOlder})
 	if errors.Is(err, drill.ErrNothingToDo) {
 		log.Info("no drill requested")
 		return nil
