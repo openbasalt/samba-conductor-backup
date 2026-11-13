@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -71,6 +72,15 @@ Keys:
 
 Global: --config FILE (default /etc/conductor-backup/conductor-backup.toml)
 `
+
+// The drill sandbox confines its main thread and starts every child from
+// it (internal/drill/confine.go): lock the main goroutine to the main
+// thread before main runs.
+func init() {
+	if len(os.Args) > 1 && os.Args[1] == "drill-sandbox" {
+		runtime.LockOSThread()
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {

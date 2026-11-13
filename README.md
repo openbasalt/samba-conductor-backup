@@ -56,8 +56,9 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
   [docs/design.md](docs/design.md#what-a-backup-can-make-the-restoring-host-do)).
 - Restore drills (`drill`, on a drill host, never a DC): the newest backup
   is restored into a sandbox with no network (new network, mount, PID,
-  UTS and IPC namespaces; loopback and a dummy interface only), started,
-  and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
+  UTS and IPC namespaces; loopback and a dummy interface only), a minimal
+  root of its own (no credentials in it), reduced capabilities,
+  `no_new_privs` and a seccomp filter, started, and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
   probe account works, the user count matches the source, sample SIDs are
   unchanged. The plaintext is shredded, the measured restore time (RTO) and
   every check go into a signed report that conductor shows and audits.

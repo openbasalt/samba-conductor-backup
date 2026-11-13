@@ -21,15 +21,16 @@ import (
 	"github.com/openbasalt/samba-conductor-ad/helper"
 	"github.com/openbasalt/samba-conductor-ad/sambatool"
 	"github.com/openbasalt/samba-conductor-backup/internal/sambaconf"
+	"golang.org/x/sys/unix"
 )
 
 // The sandbox is a child process of `conductor-backup drill` started in new
 // network, mount, PID, UTS and IPC namespaces. Its network namespace has
 // only a loopback and a dummy interface (192.0.2.10, TEST-NET-1), so the
 // restored domain controller has no path to anything: not the real DCs,
-// not the bucket. Its mount namespace gets a private /run/samba, /proc,
-// /etc/resolv.conf (127.0.0.1) and /etc/hosts. When it exits, the kernel
-// kills whatever is left in its PID namespace.
+// not the bucket. It then pivots into a minimal root of its own and drops
+// privileges before anything from the backup runs (confine.go). When it
+// exits, the kernel kills whatever is left in its PID namespace.
 
 // sandboxIP is the restored DC's address inside the sandbox.
 const sandboxIP = "192.0.2.10"
@@ -183,34 +184,30 @@ func RunSandbox(specPath string) int {
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "drill-sandbox: "+format+"\n", a...) }
 
 // isolate prepares the namespaces: private mounts, loopback + dummy
-// network, host name.
+// network, host name; then confines the sandbox (confine.go): new root,
+// capabilities, no_new_privs, seccomp. Any layer that cannot be set up
+// fails the drill.
 func isolate(spec SandboxSpec) error {
+	if tid, pid := unix.Gettid(), unix.Getpid(); tid != pid {
+		// The confinement is applied to this thread and inherited by the
+		// children it starts: it must be the locked main thread.
+		return fmt.Errorf("not on the main thread (tid %d, pid %d)", tid, pid)
+	}
 	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("private mounts: %w", err)
 	}
-	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
-		return fmt.Errorf("/proc: %w", err)
-	}
-	if err := os.MkdirAll("/run/samba", 0o755); err != nil {
-		return err
-	}
-	if err := syscall.Mount("tmpfs", "/run/samba", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=0755,size=64m"); err != nil {
-		return fmt.Errorf("/run/samba: %w", err)
-	}
 	host := strings.ToLower(spec.ServerName)
 	domain := strings.ToLower(spec.Realm)
-	files := map[string]string{
-		"/etc/resolv.conf": "nameserver 127.0.0.1\nsearch " + domain + "\n",
-		"/etc/hosts":       "127.0.0.1 localhost\n" + sandboxIP + " " + host + "." + domain + " " + host + "\n",
-	}
-	for target, content := range files {
-		src := filepath.Join(spec.WorkDir, filepath.Base(target))
+	etc := map[string]string{}
+	for name, content := range map[string]string{
+		"resolv.conf": "nameserver 127.0.0.1\nsearch " + domain + "\n",
+		"hosts":       "127.0.0.1 localhost\n" + sandboxIP + " " + host + "." + domain + " " + host + "\n",
+	} {
+		src := filepath.Join(spec.WorkDir, name)
 		if err := writeNew(src, []byte(content), 0o644); err != nil {
 			return err
 		}
-		if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
-			return fmt.Errorf("bind %s: %w", target, err)
-		}
+		etc[name] = src
 	}
 	if err := syscall.Sethostname([]byte(host)); err != nil {
 		return fmt.Errorf("host name: %w", err)
@@ -229,7 +226,23 @@ func isolate(spec SandboxSpec) error {
 			return fmt.Errorf("ip %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
-	return nil
+	return confine(rootLayout{Root: filepath.Join(spec.WorkDir, ".root"), WorkDir: spec.WorkDir, EtcFiles: etc,
+		EtcLinks: map[string]string{"samba": filepath.Join(spec.TargetDir, "etc")}})
+}
+
+// confine builds the new root, pivots into it and drops privileges, then
+// checks the result as the kernel reports it.
+func confine(l rootLayout) error {
+	if err := buildRoot(l); err != nil {
+		return fmt.Errorf("new root: %w", err)
+	}
+	if err := pivot(l.Root); err != nil {
+		return err
+	}
+	if err := restrict(); err != nil {
+		return err
+	}
+	return verifyRestricted()
 }
 
 // writeNew creates a file that must not exist yet (never through a link).
