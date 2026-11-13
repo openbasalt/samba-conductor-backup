@@ -288,7 +288,9 @@ runs with less):
    (`passwd`, `group`, `nsswitch.conf`, `host.conf`, `gai.conf`,
    `protocols`, `services`, the dynamic linker's configuration,
    `localtime`, `crypto-policies`, `alternatives`, `gnutls`), the generated
-   `/etc/hosts` and `/etc/resolv.conf`, `/etc/samba` as a link to the
+   `/etc/hosts`, `/etc/resolv.conf` and `/etc/krb5.conf` (the restored
+   realm as the default realm, which the MIT KDC of Samba builds with MIT
+   Kerberos needs to start), `/etc/samba` as a link to the
    restored (allowlisted) configuration directory, a `/dev` with `null`, `zero`,
    `full`, `random`, `urandom` and `shm`, a `/proc` of the sandbox with
    `sys`, `sysrq-trigger`, `irq`, `bus` and `fs` read-only and `kcore`,

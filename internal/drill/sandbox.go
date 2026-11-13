@@ -201,12 +201,8 @@ func isolate(spec SandboxSpec) error {
 		return fmt.Errorf("private mounts: %w", err)
 	}
 	host := strings.ToLower(spec.ServerName)
-	domain := strings.ToLower(spec.Realm)
 	etc := map[string]string{}
-	for name, content := range map[string]string{
-		"resolv.conf": "nameserver 127.0.0.1\nsearch " + domain + "\n",
-		"hosts":       "127.0.0.1 localhost\n" + sandboxIP + " " + host + "." + domain + " " + host + "\n",
-	} {
+	for name, content := range sandboxEtcFiles(spec) {
 		src := filepath.Join(spec.WorkDir, name)
 		if err := writeNew(src, []byte(content), 0o644); err != nil {
 			return err
@@ -232,6 +228,24 @@ func isolate(spec SandboxSpec) error {
 	}
 	return confine(rootLayout{Root: filepath.Join(spec.WorkDir, ".root"), WorkDir: spec.WorkDir, EtcFiles: etc,
 		EtcLinks: map[string]string{"samba": filepath.Join(spec.TargetDir, "etc")}})
+}
+
+// sandboxEtcFiles are the generated files of the sandbox's /etc: the
+// resolver and hosts point at the restored DC, and krb5.conf names its
+// realm as the default one, as the krb5.conf Samba's provisioning writes.
+// Samba built with MIT Kerberos runs krb5kdc, which does not start without
+// a default realm; the host's krb5.conf is never shown in the sandbox.
+func sandboxEtcFiles(spec SandboxSpec) map[string]string {
+	host := strings.ToLower(spec.ServerName)
+	domain := strings.ToLower(spec.Realm)
+	realm := strings.ToUpper(spec.Realm)
+	return map[string]string{
+		"resolv.conf": "nameserver 127.0.0.1\nsearch " + domain + "\n",
+		"hosts":       "127.0.0.1 localhost\n" + sandboxIP + " " + host + "." + domain + " " + host + "\n",
+		"krb5.conf": "[libdefaults]\n\tdefault_realm = " + realm + "\n\tdns_lookup_realm = false\n\tdns_lookup_kdc = true\n\n" +
+			"[realms]\n" + realm + " = {\n\tdefault_domain = " + domain + "\n}\n\n" +
+			"[domain_realm]\n\t" + host + "." + domain + " = " + realm + "\n",
+	}
 }
 
 // confine builds the new root, pivots into it and drops privileges, then

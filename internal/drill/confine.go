@@ -24,7 +24,7 @@ import (
 //
 //  1. Filesystem: a new root (tmpfs) holding read-only binds of /usr (and
 //     the /bin, /sbin, /lib* links or binds), a short list of /etc files,
-//     the generated /etc/hosts and /etc/resolv.conf, a minimal /dev, a
+//     the generated /etc/hosts, /etc/resolv.conf and /etc/krb5.conf, a minimal /dev, a
 //     fresh /proc with its kernel knobs read-only, empty tmpfs /run, /tmp
 //     and /var, and the drill's work directory. pivot_root into it and
 //     detach the old root: the drill identity, the credentials, the rest
@@ -71,7 +71,7 @@ var rootEntries = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/lib32", 
 // read-only when the host has them: user and group names, name service and
 // dynamic linker configuration, the time zone, crypto policies and the
 // Debian alternatives links. Nothing with secrets (no ssl, pki, shadow,
-// krb5.conf, samba or conductor-backup).
+// the host's krb5.conf, samba or conductor-backup).
 var etcEntries = []string{
 	"passwd", "group", "nsswitch.conf", "host.conf", "gai.conf", "protocols", "services", "ld.so.cache", "ld.so.conf",
 	"ld.so.conf.d", "localtime", "crypto-policies", "alternatives", "gnutls",

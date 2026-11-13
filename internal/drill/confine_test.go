@@ -271,3 +271,28 @@ func TestSeccompProgramShape(t *testing.T) {
 		t.Fatal("default is not allow")
 	}
 }
+
+// TestSandboxEtcFiles: the generated /etc of the sandbox names the
+// restored realm as Kerberos' default realm. Samba built with MIT Kerberos
+// (Fedora, Basalt OS) runs krb5kdc, which refuses to start without one
+// ("Configuration file does not specify default realm"); the host's
+// krb5.conf is never shown in the sandbox.
+func TestSandboxEtcFiles(t *testing.T) {
+	files := sandboxEtcFiles(SandboxSpec{ServerName: "DRILL", Realm: "LAB.TEST"})
+	krb := files["krb5.conf"]
+	for _, want := range []string{"[libdefaults]\n", "\tdefault_realm = LAB.TEST\n", "\tdns_lookup_realm = false\n",
+		"\tdns_lookup_kdc = true\n", "[realms]\nLAB.TEST = {\n\tdefault_domain = lab.test\n}\n", "\tdrill.lab.test = LAB.TEST\n"} {
+		if !strings.Contains(krb, want) {
+			t.Errorf("krb5.conf lacks %q:\n%s", want, krb)
+		}
+	}
+	if files["resolv.conf"] != "nameserver 127.0.0.1\nsearch lab.test\n" {
+		t.Errorf("resolv.conf %q", files["resolv.conf"])
+	}
+	if files["hosts"] != "127.0.0.1 localhost\n"+sandboxIP+" drill.lab.test drill\n" {
+		t.Errorf("hosts %q", files["hosts"])
+	}
+	if len(files) != 3 {
+		t.Errorf("files %v", files)
+	}
+}
