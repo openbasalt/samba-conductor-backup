@@ -238,6 +238,19 @@ names with `..`, set-user-ID or set-group-ID files and duplicate names.
 `samba-tool domain backup online` writes only directories and regular
 files.
 
+### Files root writes after the restore
+
+`restore` copies the DC's TLS files into the restored `private/` directory
+(a tree samba-tool just built from backup content) and conductor's
+database into conductor's own directory (owned by the conductor user).
+Neither is followed: each copy goes through an `os.Root` at a trusted
+directory, every directory on the way must be a real directory (not a
+symbolic link), the data goes to a new file (`O_EXCL`, `O_NOFOLLOW`) that
+gets its owner and mode through the descriptor, and is renamed into
+place, so a link planted at the destination is replaced, never written
+through. The drill's own files in its work directory are created the same
+way.
+
 ## Decisions
 
 - Online over loopback with a replication-only account: no downtime, and

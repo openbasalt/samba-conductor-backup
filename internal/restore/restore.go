@@ -191,7 +191,8 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 		}
 		srcFile := filepath.Join(res.FilesDir, filepath.FromSlash(strings.TrimPrefix(t.Member, helper.ArchiveFilesDir)))
 		dst := filepath.Join(sambaDir, "private", filepath.FromSlash(t.Value))
-		if err := copyFile(srcFile, dst, tlsMode(t.Param)); err != nil {
+		// sambaDir came out of the backup: nothing under it is followed.
+		if err := copyInto(srcFile, sambaDir, "private/"+t.Value, tlsMode(t.Param), nil); err != nil {
 			fmt.Fprintf(log, "warning: TLS %s not placed: %v\n", t.Param, err)
 			continue
 		}
@@ -200,7 +201,7 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	if meta.ConductorDB {
 		dbSrc := filepath.Join(plain, filepath.FromSlash(helper.ArchiveConductorDB))
 		dbDst := filepath.Join(o.Target, "conductor", "conductor.db")
-		if err := copyFile(dbSrc, dbDst, 0o600); err != nil {
+		if err := copyInto(dbSrc, o.Target, "conductor/conductor.db", 0o600, nil); err != nil {
 			return nil, err
 		}
 		res.Conductor = dbDst
@@ -223,36 +224,23 @@ func tlsMode(param string) os.FileMode {
 	return 0o644
 }
 
+// exists reports whether p is there (without following a final link).
 func exists(p string) bool {
-	_, err := os.Stat(p)
+	_, err := os.Lstat(p)
 	return err == nil
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
-}
-
 // installConductorDB puts the database in place for the conductor user,
-// keeping any database already there.
+// keeping any database already there. The directory belongs to the
+// conductor user, so nothing in it is followed: the old files are renamed
+// inside it, the new one is written to a fresh file, owned through its
+// descriptor and renamed into place.
 func installConductorDB(src, dst string) (string, error) {
 	if dst == "" {
 		dst = "/var/lib/conductor/conductor.db"
+	}
+	if !filepath.IsAbs(dst) || filepath.Clean(dst) != dst {
+		return "", errors.New("the conductor database path must be a clean absolute path")
 	}
 	u, err := user.Lookup("conductor")
 	if err != nil {
@@ -260,27 +248,32 @@ func installConductorDB(src, dst string) (string, error) {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+	dir, base := filepath.Dir(dst), filepath.Base(dst)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	if exists(dst) {
-		keep := dst + ".pre-restore-" + time.Now().UTC().Format("20060102T150405Z")
-		if err := os.Rename(dst, keep); err != nil {
+	root, err := openDirRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := root.Lstat(base); err == nil {
+		keep := base + ".pre-restore-" + time.Now().UTC().Format("20060102T150405Z")
+		if err := root.Rename(base, keep); err != nil {
 			return "", err
 		}
 		for _, sfx := range []string{"-wal", "-shm"} {
-			if exists(dst + sfx) {
-				_ = os.Rename(dst+sfx, keep+sfx)
+			if _, err := root.Lstat(base + sfx); err == nil {
+				_ = root.Rename(base+sfx, keep+sfx)
 			}
 		}
 	}
-	if err := copyFile(src, dst, 0o600); err != nil {
+	if err := copyInto(src, dir, base, 0o600, &owner{uid: uid, gid: gid}); err != nil {
 		return "", err
 	}
-	if err := os.Chown(dst, uid, gid); err != nil {
+	if err := os.Lchown(dir, uid, gid); err != nil {
 		return "", err
 	}
-	_ = os.Chown(filepath.Dir(dst), uid, gid)
 	return dst, nil
 }
 

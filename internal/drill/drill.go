@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"filippo.io/age"
@@ -333,7 +334,7 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	if err := state.WriteJSON(specPath, spec); err != nil {
 		return finish(err)
 	}
-	logw, err := os.OpenFile(filepath.Join(d.Cfg.Drill.WorkDir, "sandbox.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logw, err := os.OpenFile(filepath.Join(d.Cfg.Drill.WorkDir, "sandbox.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return finish(err)
 	}

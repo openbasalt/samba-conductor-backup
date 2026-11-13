@@ -205,7 +205,7 @@ func isolate(spec SandboxSpec) error {
 	}
 	for target, content := range files {
 		src := filepath.Join(spec.WorkDir, filepath.Base(target))
-		if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+		if err := writeNew(src, []byte(content), 0o644); err != nil {
 			return err
 		}
 		if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
@@ -232,6 +232,19 @@ func isolate(spec SandboxSpec) error {
 	return nil
 }
 
+// writeNew creates a file that must not exist yet (never through a link).
+func writeNew(path string, b []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 func findIP() (string, error) {
 	for _, p := range []string{"/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"} {
 		if _, err := os.Stat(p); err == nil {
@@ -244,7 +257,7 @@ func findIP() (string, error) {
 // startSamba starts the restored DC in the foreground (its own process
 // group) and returns a function that stops it.
 func startSamba(spec SandboxSpec) (func(), error) {
-	lf, err := os.OpenFile(filepath.Join(spec.WorkDir, "samba.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	lf, err := os.OpenFile(filepath.Join(spec.WorkDir, "samba.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
 	}
