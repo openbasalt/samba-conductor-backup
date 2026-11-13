@@ -291,6 +291,21 @@ and the read-only system binds). It cannot mount, load code into the
 kernel, reach the host's other files, its devices or the network, or see
 other processes. The decrypted backup it sees is the one it was given.
 
+The drill unit (`conductor-backup-drill.service`) confines the service as
+a whole on top of that: a capability bounding set limited to the
+sandbox's setup (`CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SETPCAP`) and what
+it keeps for Samba, `NoNewPrivileges`, `ProtectSystem=strict` (only the
+state directory is writable), `ProtectHome`, `PrivateTmp`,
+`PrivateDevices`, the credentials directory inaccessible except through
+`$CREDENTIALS_DIRECTORY`, `ProtectProc=invisible`, the kernel protections
+(tunables, modules, logs, control groups, clock), `RestrictNamespaces`
+to the five namespaces the sandbox creates, `RestrictAddressFamilies`
+(Unix, IPv4, IPv6, netlink), `RestrictSUIDSGID` and a system call filter
+(`@system-service`, plus `@mount`, `@sandbox` and `sethostname` for the
+sandbox's setup). `ProtectHostname` is not set: it would forbid naming the
+sandbox's own UTS namespace. `MemoryDenyWriteExecute` is not set either:
+samba-tool's Python modules may need writable executable memory.
+
 #### Open: a user namespace
 
 The next step is a user namespace, so that the sandbox's root maps to an
