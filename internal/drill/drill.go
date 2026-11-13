@@ -31,6 +31,7 @@ import (
 	"github.com/openbasalt/samba-conductor-backup/internal/dest"
 	"github.com/openbasalt/samba-conductor-backup/internal/manifest"
 	"github.com/openbasalt/samba-conductor-backup/internal/runner"
+	"github.com/openbasalt/samba-conductor-backup/internal/sambaconf"
 	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 	"github.com/openbasalt/samba-conductor-backup/internal/state"
 )
@@ -314,11 +315,20 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 		return finish(errors.New("drill.probe_user is not configured"))
 	}
 
-	// Restore, start and check in the sandbox.
+	// The backup's own smb.conf is never used: scan the Samba backup file
+	// (no links, devices or names leaving the target) and generate the
+	// configuration samba-tool restores with (internal/sambaconf).
 	spec := SandboxSpec{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)), TargetDir: filepath.Join(work, "restore"),
-		WorkDir: work, ServerName: d.Cfg.Drill.ServerName, Realm: strings.ToUpper(d.Cfg.Realm), ProbeUser: d.Cfg.Drill.ProbeUser,
+		WorkDir: work, ServerName: strings.ToUpper(d.Cfg.Drill.ServerName), Realm: strings.ToUpper(d.Cfg.Realm), ProbeUser: d.Cfg.Drill.ProbeUser,
 		Samples: meta.Samples, Users: meta.Users, SambaBinary: d.Cfg.Drill.SambaBinary, SambaTool: d.Cfg.Drill.SambaTool,
-		TimeoutSeconds: d.Cfg.Drill.TimeoutMinutes * 60}
+		TimeoutSeconds: d.Cfg.Drill.TimeoutMinutes * 60, ConfigFile: filepath.Join(work, "restore-smb.conf")}
+	expect, err := sambaconf.Prepare(spec.BackupFile, spec.ConfigFile, spec.ServerName, spec.Realm, spec.TargetDir)
+	if err != nil {
+		return finish(err)
+	}
+	spec.Workgroup = expect.Workgroup
+	rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "config", OK: true,
+		Detail: "backup scanned; smb.conf generated (workgroup " + expect.Workgroup + ")"})
 	specPath := filepath.Join(work, "sandbox.json")
 	if err := state.WriteJSON(specPath, spec); err != nil {
 		return finish(err)

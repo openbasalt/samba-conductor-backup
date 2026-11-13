@@ -22,6 +22,7 @@ import (
 	"github.com/openbasalt/samba-conductor-backup/internal/archive"
 	"github.com/openbasalt/samba-conductor-backup/internal/dest"
 	"github.com/openbasalt/samba-conductor-backup/internal/runner"
+	"github.com/openbasalt/samba-conductor-backup/internal/sambaconf"
 	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
@@ -148,8 +149,15 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 		tool = "/usr/bin/samba-tool"
 	}
 	r := &sambatool.Runner{Binary: tool, Credentials: sambatool.LocalSystem{}, Timeout: 2 * time.Hour}
-	op := sambatool.DomainBackupRestore{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)), TargetDir: sambaDir,
-		NewServerName: name, HostIP: o.HostIP}
+	// The backup's smb.conf is never loaded: samba-tool restores with a
+	// configuration generated from the allowlist (internal/sambaconf), after
+	// the backup file was scanned for links and names leaving the target.
+	op := sambaconf.RestoreOp{DomainBackupRestore: sambatool.DomainBackupRestore{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)),
+		TargetDir: sambaDir, NewServerName: name, HostIP: o.HostIP}, ConfigFile: filepath.Join(work, "restore-smb.conf")}
+	expect, err := sambaconf.Prepare(op.BackupFile, op.ConfigFile, name, o.Realm, sambaDir)
+	if err != nil {
+		return nil, err
+	}
 	cmdline, err := sambatool.Preview(r, op)
 	if err != nil {
 		return nil, err
@@ -159,6 +167,13 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 		return nil, err
 	}
 	_ = archive.Shred(op.BackupFile)
+	conf, err := sambaconf.Finalize(expect)
+	if err != nil {
+		return nil, fmt.Errorf("restored smb.conf: %w", err)
+	}
+	if len(conf.Dropped) > 0 {
+		fmt.Fprintf(log, "restored smb.conf: dropped %s\n", strings.Join(conf.Dropped, ", "))
+	}
 	res := &Result{Meta: meta, BackupID: b.ID, ServerName: name, SambaDir: sambaDir, FilesDir: filepath.Join(o.Target, "files")}
 
 	// Host files (configs, TLS) next to the restored domain.
@@ -281,6 +296,8 @@ func NextSteps(r *Result) string {
 	b.WriteString("Next steps (full-forest recovery, conductor/docs/restore.md):\n")
 	fmt.Fprintf(&b, "  1. Make sure no old DC of %s is running on the network.\n", r.Meta.Realm)
 	fmt.Fprintf(&b, "  2. Use the restored configuration:\n       systemctl stop samba-ad-dc\n       mv /etc/samba/smb.conf /etc/samba/smb.conf.pre-restore\n       ln -s %s/etc/smb.conf /etc/samba/smb.conf\n       cp %s/private/krb5.conf /etc/krb5.conf\n", r.SambaDir, r.SambaDir)
+	fmt.Fprintf(&b, "     It holds only the parameters a restored DC needs. The backup's own smb.conf is kept, unused, as\n"+
+		"     %s/etc/smb.conf.orig: review it and copy the parameters you need (TLS files, DNS forwarder) one by one.\n", r.SambaDir)
 	if len(r.TLSPlaced) > 0 {
 		fmt.Fprintf(&b, "  3. TLS: the old DC's certificate files were put back (%s); issue one for %s.%s from your CA and replace them\n",
 			strings.Join(r.TLSPlaced, ", "), strings.ToLower(r.ServerName), domain)

@@ -51,7 +51,9 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
 - Restore (`restore`): a real AD restore with `samba-tool domain backup
   restore` (original SIDs and GUIDs, FSMO roles seized, old DCs removed,
   krbtgt renewed), after checking the download against the signed manifest,
-  and the exact next steps.
+  and the exact next steps. The backup's own `smb.conf` is never loaded:
+  samba-tool restores with an allowlisted configuration (see
+  [docs/design.md](docs/design.md#what-a-backup-can-make-the-restoring-host-do)).
 - Restore drills (`drill`, on a drill host, never a DC): the newest backup
   is restored into a sandbox with no network (new network, mount, PID,
   UTS and IPC namespaces; loopback and a dummy interface only), started,

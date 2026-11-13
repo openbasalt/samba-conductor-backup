@@ -173,6 +173,71 @@ while others live, accidental deletion, key loss) are in the
 - Drills currently run unconfined under SELinux (namespaces, mounts,
   Samba as root); the drill host is a separate machine.
 
+## What a backup can make the restoring host do
+
+A backup that verifies is not a trusted one: whoever holds the DC's
+signing key and can write to the bucket can produce one (age is not
+sender-authenticated, and both sit with the unprivileged `conductor-backup`
+user on the DC). The drill host and the operator's restore host therefore
+treat the decrypted content as hostile input.
+
+### smb.conf
+
+The Samba backup carries the backed-up DC's `smb.conf`, and smb.conf can
+make Samba run commands (`dns update command`, `check password script`,
+`panic action`, `root preexec`, the other `*command` and `*script`
+parameters), load modules (`vfs objects`), read other files (`include`),
+use another configuration store (`config backend = registry`) and point
+shares anywhere. `samba-tool domain backup restore` loads it as root and
+writes the backup's sysvol into the `[sysvol]` path it names. So:
+
+- Before the restore, conductor-backup reads the backup's `etc/smb.conf`
+  itself (Samba never loads it). `include`, `config backend`, `config file`
+  or `registry shares` anywhere refuse the restore; the realm must be the
+  configured one; only the workgroup is taken from it (a NetBIOS domain
+  name: letters, digits, `.`, `_`, `-`, at most 15 characters).
+- samba-tool restores with a configuration generated from the allowlist
+  below (`--configfile`): it copies that file over the backup's
+  `etc/smb.conf` and keeps the backup's as `etc/smb.conf.orig`, which
+  nothing loads.
+- After the restore, the `smb.conf` samba-tool wrote is checked against the
+  allowlist and rewritten in canonical form before Samba starts. Every
+  allowlisted parameter must be present with exactly the expected value;
+  anything else is dropped (and logged); the refused constructs fail the
+  restore or the drill, with the reason in the drill report.
+
+The allowlist is what `samba-tool domain backup restore` itself writes for
+a restored DC (its `make_smbconf` call) and nothing more; every other
+parameter keeps Samba's compiled-in default:
+
+| Section | Parameter | Value |
+|---|---|---|
+| `[global]` | `netbios name` | the restored DC's name (`--newservername`, `drill.server_name`) |
+| | `workgroup` | the backup's workgroup (checked as above) |
+| | `realm` | the configured realm |
+| | `server role` | `active directory domain controller` |
+| | `private dir`, `lock dir`, `state directory`, `cache directory`, `binddns dir` | `TARGET/private`, `TARGET`, `TARGET/state`, `TARGET/cache`, `TARGET/bind-dns` |
+| `[sysvol]` | `path`, `read only` | `TARGET/state/sysvol`, `no` |
+| `[netlogon]` | `path`, `read only` | `TARGET/state/sysvol/<realm>/scripts`, `no` |
+
+`TARGET` is samba-tool's target directory (the drill's throwaway restore
+directory, or `--target`/samba for `restore`). Paths are compared exactly,
+after cleaning, and may not contain substitutions (`%`).
+
+After a real restore, the operator's custom parameters (TLS files and
+DNS forwarders, for example) are in `etc/smb.conf.orig` for review; copy them over by
+hand, never the whole file.
+
+### The Samba backup file
+
+samba-tool extracts the backup file (and the `sysvol.tar.gz` nested in it)
+with Python's `tarfile` as root. Its extraction filter refuses most
+tricks, but has had bypasses, so conductor-backup reads both archives first
+and refuses links (symbolic and hard), devices, FIFOs, absolute names,
+names with `..`, set-user-ID or set-group-ID files and duplicate names.
+`samba-tool domain backup online` writes only directories and regular
+files.
+
 ## Decisions
 
 - Online over loopback with a replication-only account: no downtime, and
