@@ -11,7 +11,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/openbasalt/samba-conductor-ad v0.0.0-20261009012208-17469fcb3764
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
