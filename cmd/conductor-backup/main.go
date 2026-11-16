@@ -63,7 +63,7 @@ Anywhere you can read the bucket (as root, with the offline key):
           [--with-conductor-state] [--host-ip IP] [--destination N] [--accept-older]
 
 On a drill host (root; never on a DC):
-  drill [--now] [--backup ID] [--accept-older]
+  drill [--now] [--backup ID] [--accept-older] [--accept-no-userns]
                               run a requested (or forced) restore drill
 
 Keys:
@@ -78,7 +78,7 @@ Global: --config FILE (default /etc/conductor-backup/conductor-backup.toml)
 // it (internal/drill/confine.go): lock the main goroutine to the main
 // thread before main runs.
 func init() {
-	if len(os.Args) > 1 && os.Args[1] == "drill-sandbox" {
+	if len(os.Args) > 1 && (os.Args[1] == "drill-sandbox" || os.Args[1] == "drill-sandbox-inner") {
 		runtime.LockOSThread()
 	}
 }
@@ -95,6 +95,13 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(drill.RunSandbox(args[0]))
+	}
+	if cmd == "drill-sandbox-inner" {
+		// Internal: the sandbox's second stage, in its user namespace.
+		if len(args) != 1 {
+			os.Exit(2)
+		}
+		os.Exit(drill.RunSandboxInner(args[0]))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -517,6 +524,7 @@ func cmdDrill(ctx context.Context, log *slog.Logger, args []string) error {
 	now := fs.Bool("now", false, "drill the newest backup now (without a request)")
 	backup := fs.String("backup", "", "with --now: this backup")
 	acceptOlder := fs.Bool("accept-older", false, "accept that the newest backup is older than one seen before (newer ones were removed)")
+	acceptNoUserNS := fs.Bool("accept-no-userns", false, "run the restored DC as host root (reduced capabilities) when the host cannot create a user namespace")
 	parse(fs, args)
 	cfg, err := config.Load(*path)
 	if err != nil {
@@ -559,7 +567,7 @@ func cmdDrill(ctx context.Context, log *slog.Logger, args []string) error {
 	}
 	d := &drill.Drill{Cfg: cfg, Store: ss[0], Trusted: trusted, Key: key, Identities: ids, ProbePassword: strings.TrimRight(string(pw), "\r\n"),
 		Alerts: alert.New(cfg), Log: log, Version: version, Exe: exe}
-	rep, err := d.Run(ctx, drill.Options{Force: *now, BackupID: *backup, AcceptOlder: *acceptOlder})
+	rep, err := d.Run(ctx, drill.Options{Force: *now, BackupID: *backup, AcceptOlder: *acceptOlder, AcceptNoUserNS: *acceptNoUserNS})
 	if errors.Is(err, drill.ErrNothingToDo) {
 		log.Info("no drill requested")
 		return nil

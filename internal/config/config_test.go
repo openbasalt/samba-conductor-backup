@@ -40,6 +40,9 @@ func TestValidation(t *testing.T) {
 		"duplicate dest": "realm = \"EXAMPLE.COM\"\n[[destination]]\nname=\"l\"\ntype=\"local\"\npath=\"/x\"\n[[destination]]\nname=\"l\"\ntype=\"local\"\npath=\"/y\"\n",
 		"relative path":  "realm = \"EXAMPLE.COM\"\nstate_dir = \"var/lib\"\n",
 		"bad public key": "realm = \"EXAMPLE.COM\"\ndrill_public_keys = [\"age1xyz\"]\n",
+		"userns low":     "realm = \"EXAMPLE.COM\"\n[drill]\nuserns_base = 1000\n",
+		"userns high":    "realm = \"EXAMPLE.COM\"\n[drill]\nuserns_base = 2147352576\n",
+		"userns align":   "realm = \"EXAMPLE.COM\"\n[drill]\nuserns_base = 1879048193\n",
 	}
 	for name, text := range bad {
 		p := filepath.Join(t.TempDir(), "c.toml")
@@ -47,6 +50,24 @@ func TestValidation(t *testing.T) {
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// TestUserNSDefaults: drills use a user namespace by default, on the
+// default range, and running without one is an explicit choice.
+func TestUserNSDefaults(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.toml")
+	_ = os.WriteFile(p, []byte("realm = \"EXAMPLE.COM\"\n"), 0o600)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Drill.UserNSBase != DefaultUserNSBase || c.Drill.AcceptNoUserNS {
+		t.Fatalf("drill %+v", c.Drill)
+	}
+	_ = os.WriteFile(p, []byte("realm = \"EXAMPLE.COM\"\n[drill]\nuserns_base = 1610612736\naccept_no_userns = true\n"), 0o600)
+	if c, err = Load(p); err != nil || c.Drill.UserNSBase != 1610612736 || !c.Drill.AcceptNoUserNS {
+		t.Fatalf("explicit: %+v %v", c, err)
 	}
 }
 

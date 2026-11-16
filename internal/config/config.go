@@ -118,8 +118,9 @@ type Drill struct {
 	// Kerberos and LDAP checks; ProbePassword is its credential.
 	ProbeUser     string `toml:"probe_user"`
 	ProbePassword string `toml:"probe_password"`
-	// WorkDir holds downloads and the throwaway restore (on disk: the
-	// restore needs extended attributes for sysvol ACLs).
+	// WorkDir holds downloads and the decrypted backup (the throwaway
+	// restore itself goes to a tmpfs of the sandbox's user namespace, or
+	// here when drills run without one).
 	WorkDir string `toml:"work_dir"`
 	// ServerName is the NetBIOS name of the restored DC (default DRILL).
 	ServerName string `toml:"server_name"`
@@ -133,7 +134,27 @@ type Drill struct {
 	SambaTool   string `toml:"samba_tool"`
 	// TimeoutMinutes bounds one drill (default 30).
 	TimeoutMinutes int `toml:"timeout_minutes"`
+	// UserNSBase is the first host ID of the range the drill sandbox's
+	// user namespace maps its IDs 0 to UserNSSize-1 to (default
+	// DefaultUserNSBase). Nothing else on the host may use that range.
+	UserNSBase uint32 `toml:"userns_base"`
+	// AcceptNoUserNS runs drills without a user namespace (Samba as host
+	// root with reduced capabilities) when the host cannot create one.
+	// Off by default: a drill then fails instead.
+	AcceptNoUserNS bool `toml:"accept_no_userns"`
 }
+
+// The drill sandbox's user namespace maps UserNSSize IDs, enough for
+// the IDs Samba hands out on a DC (idmap.ldb's range starts at 3000000),
+// to host IDs starting at UserNSBase. The default range sits above the
+// container ranges systemd allocates (524288 to 1879048191) and below its
+// foreign range (from 2147352576).
+const (
+	UserNSSize        = 1 << 22
+	DefaultUserNSBase = 0x70000000
+	minUserNSBase     = 0x80000
+	maxUserNSEnd      = 0x7FFE0000
+)
 
 // Load reads and validates a configuration file.
 func Load(path string) (*Config, error) {
@@ -204,6 +225,9 @@ func (c *Config) defaults() {
 	}
 	if d.TimeoutMinutes <= 0 {
 		d.TimeoutMinutes = 30
+	}
+	if d.UserNSBase == 0 {
+		d.UserNSBase = DefaultUserNSBase
 	}
 	if d.Identity == "" {
 		d.Identity = "drill-identity"
@@ -329,6 +353,9 @@ func (c *Config) Validate() error {
 	}
 	if d.MaxBackupAgeHours < 0 {
 		add("drill: max_backup_age_hours must be >= 0")
+	}
+	if d.UserNSBase < minUserNSBase || uint64(d.UserNSBase)+UserNSSize > maxUserNSEnd || d.UserNSBase%65536 != 0 {
+		add("drill: userns_base must be a multiple of 65536 between %d and %d", minUserNSBase, maxUserNSEnd-UserNSSize)
 	}
 	return errors.Join(errs...)
 }

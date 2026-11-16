@@ -345,6 +345,24 @@ func TestScanBackup(t *testing.T) {
 	}
 }
 
+// TestScanBackupKDC: a backup carrying private/kdc.conf was made by an MIT
+// build (Fedora); one without it by a Heimdal build (Debian).
+func TestScanBackupKDC(t *testing.T) {
+	info, err := ScanBackupInfo(writeBackup(t, tarBytes(t, goodMembers(), true)))
+	if err != nil || info.KDC != KDCHeimdal || string(info.Conf) != backupConf {
+		t.Fatalf("heimdal: %+v %v", info, err)
+	}
+	ms := append(goodMembers(), member{name: "./private/kdc.conf", typ: tar.TypeReg, body: "[kdcdefaults]\n"})
+	p := writeBackup(t, tarBytes(t, ms, true))
+	if info, err = ScanBackupInfo(p); err != nil || info.KDC != KDCMIT {
+		t.Fatalf("mit: %+v %v", info, err)
+	}
+	e, err := Prepare(p, filepath.Join(t.TempDir(), "c"), "drill", "lab.test", "/var/lib/x/restore")
+	if err != nil || e.BackupKDC != KDCMIT {
+		t.Fatalf("prepare: %+v %v", e, err)
+	}
+}
+
 func TestScanBackupRefuses(t *testing.T) {
 	cases := map[string]member{
 		"symlink":          {name: "./private/tls", typ: tar.TypeSymlink, link: "/etc"},

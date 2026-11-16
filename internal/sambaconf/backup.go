@@ -34,18 +34,48 @@ const sysvolTar = "sysvol.tar.gz"
 // by `samba-tool domain backup online` holds only directories and regular
 // files. It returns the backup's etc/smb.conf (for FromBackup).
 func ScanBackup(file string) ([]byte, error) {
+	info, err := ScanBackupInfo(file)
+	return info.Conf, err
+}
+
+// KDC flavours of a Samba build: Heimdal (Samba's embedded KDC, as Debian
+// and Ubuntu build it) or MIT Kerberos (krb5kdc with Samba's KDB plugin,
+// as Fedora and RHEL build it).
+const (
+	KDCHeimdal = "heimdal"
+	KDCMIT     = "mit"
+)
+
+// kdcConf is what a DC provisioned by an MIT build has in its private
+// directory (the MIT KDC's configuration); Heimdal builds never write it.
+const kdcConf = "private/kdc.conf"
+
+// BackupInfo is what ScanBackupInfo learns from a Samba backup file.
+type BackupInfo struct {
+	// Conf is the backup's etc/smb.conf.
+	Conf []byte
+	// KDC is the KDC flavour of the Samba build that made the backup
+	// (KDCMIT when the backup carries private/kdc.conf, else KDCHeimdal).
+	KDC string
+}
+
+// ScanBackupInfo is ScanBackup that also reports the backup's KDC flavour.
+func ScanBackupInfo(file string) (BackupInfo, error) {
+	info := BackupInfo{KDC: KDCHeimdal}
 	f, err := os.Open(file)
 	if err != nil {
-		return nil, err
+		return info, err
 	}
 	defer func() { _ = f.Close() }()
 	r, err := decompress(bufio.NewReader(f))
 	if err != nil {
-		return nil, err
+		return info, err
 	}
 	var conf []byte
 	err = scanTar(r, "", func(name string, hdr *tar.Header, body io.Reader) error {
 		switch name {
+		case kdcConf:
+			info.KDC = KDCMIT
 		case "etc/smb.conf":
 			if hdr.Size > MaxSize {
 				return fmt.Errorf("etc/smb.conf is larger than %d bytes", MaxSize)
@@ -67,12 +97,13 @@ func ScanBackup(file string) ([]byte, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("samba backup refused: %w", err)
+		return info, fmt.Errorf("samba backup refused: %w", err)
 	}
 	if conf == nil {
-		return nil, ErrNoConf
+		return info, ErrNoConf
 	}
-	return conf, nil
+	info.Conf = conf
+	return info, nil
 }
 
 // decompress picks the decompressor from the magic bytes, as Python's
@@ -186,18 +217,19 @@ func (o RestoreOp) Command() (sambatool.Command, error) {
 // Prepare scans a Samba backup file, reads the workgroup and the
 // functional level from its smb.conf and writes the configuration samba-tool restores with
 // (configPath, a new 0600 file). It returns the expectation Sanitize
-// checks the restored configuration against.
+// checks the restored configuration against, with the backup's KDC flavour
+// (BackupInfo.KDC) in BackupKDC.
 func Prepare(backupFile, configPath, netbiosName, realm, targetDir string) (Expect, error) {
-	raw, err := ScanBackup(backupFile)
+	info, err := ScanBackupInfo(backupFile)
 	if err != nil {
 		return Expect{}, err
 	}
-	bc, err := FromBackup(raw, realm)
+	bc, err := FromBackup(info.Conf, realm)
 	if err != nil {
 		return Expect{}, err
 	}
 	e := Expect{NetbiosName: strings.ToUpper(netbiosName), Workgroup: bc.Workgroup, Realm: strings.ToUpper(realm), TargetDir: targetDir,
-		FunctionalLevel: bc.FunctionalLevel}
+		FunctionalLevel: bc.FunctionalLevel, BackupKDC: info.KDC}
 	conf, err := Generate(e)
 	if err != nil {
 		return Expect{}, err

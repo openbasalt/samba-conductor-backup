@@ -23,6 +23,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"filippo.io/age"
 	"github.com/openbasalt/samba-conductor-ad/helper"
@@ -55,6 +56,9 @@ type Drill struct {
 	Exe string
 	// sandbox is replaced in tests.
 	sandbox func(ctx context.Context, exe, spec, pw string, logw io.Writer) (SandboxResult, error)
+	// hostKDC reports the KDC flavour of this host's Samba (kdc.go);
+	// replaced in tests.
+	hostKDC func(ctx context.Context, sambaTool string) (string, error)
 }
 
 // Options of a drill run.
@@ -67,6 +71,9 @@ type Options struct {
 	// than one this host has seen (see runner.CheckRollback) and resets
 	// the high-water mark to it.
 	AcceptOlder bool
+	// AcceptNoUserNS runs the drill without a user namespace when the
+	// host cannot create one (as drill.accept_no_userns does).
+	AcceptNoUserNS bool
 }
 
 // hostState is the drill host's bookkeeping (<work_dir>/drill-state.json).
@@ -132,7 +139,7 @@ func (d *Drill) Run(ctx context.Context, opts Options) (*manifest.DrillReport, e
 	if req != nil {
 		backupID = req.BackupID
 	}
-	rep := d.drill(ctx, list, backupID, req, rollback)
+	rep := d.drill(ctx, list, backupID, req, rollback, opts.AcceptNoUserNS || d.Cfg.Drill.AcceptNoUserNS)
 	if req != nil {
 		hs.Handled = append(hs.Handled, req.ID)
 		if len(hs.Handled) > 200 {
@@ -289,7 +296,8 @@ func hostName() string {
 
 // drill restores one backup and checks it. It never returns without a
 // report; the plaintext is shredded whatever happens.
-func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string, req *manifest.DrillRequest, rollback error) *manifest.DrillReport {
+func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string, req *manifest.DrillRequest, rollback error,
+	acceptNoUserNS bool) *manifest.DrillReport {
 	start := d.now()
 	rep := &manifest.DrillReport{Format: manifest.ReportFormat, Realm: strings.ToUpper(d.Cfg.Realm), Version: d.Version, Phases: map[string]int64{},
 		Drill: helper.DrillRecord{ID: start.Format("20060102T150405Z") + "-" + hostName(), Host: hostName(), StartedAt: start}}
@@ -299,10 +307,7 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	finish := func(err error) *manifest.DrillReport {
 		rep.Drill.FinishedAt = d.now()
 		if err != nil {
-			rep.Drill.Error = err.Error()
-			if len(rep.Drill.Error) > 200 {
-				rep.Drill.Error = rep.Drill.Error[:197] + "..."
-			}
+			rep.Drill.Error = truncateError(err.Error())
 		}
 		rep.Drill.Passed = err == nil && len(rep.Drill.Checks) > 0
 		for _, c := range rep.Drill.Checks {
@@ -381,12 +386,26 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	spec := SandboxSpec{BackupFile: filepath.Join(plain, filepath.FromSlash(meta.SambaFile)), TargetDir: filepath.Join(work, "restore"),
 		WorkDir: work, ServerName: strings.ToUpper(d.Cfg.Drill.ServerName), Realm: strings.ToUpper(d.Cfg.Realm), ProbeUser: d.Cfg.Drill.ProbeUser,
 		Samples: meta.Samples, Users: meta.Users, SambaBinary: d.Cfg.Drill.SambaBinary, SambaTool: d.Cfg.Drill.SambaTool,
-		TimeoutSeconds: d.Cfg.Drill.TimeoutMinutes * 60, ConfigFile: filepath.Join(work, "restore-smb.conf")}
+		TimeoutSeconds: d.Cfg.Drill.TimeoutMinutes * 60, ConfigFile: filepath.Join(work, "restore-smb.conf"),
+		UserNSBase: d.Cfg.Drill.UserNSBase, AcceptNoUserNS: acceptNoUserNS}
 	expect, err := sambaconf.Prepare(spec.BackupFile, spec.ConfigFile, spec.ServerName, spec.Realm, spec.TargetDir)
 	if err != nil {
 		return finish(err)
 	}
 	spec.Workgroup, spec.FunctionalLevel = expect.Workgroup, expect.FunctionalLevel
+	// A backup of a Heimdal build (Debian) on an MIT build (Fedora), or the
+	// reverse, is refused before anything runs (kdc.go).
+	probe := d.hostKDC
+	if probe == nil {
+		probe = hostKDC
+	}
+	kdc, err := probe(ctx, d.Cfg.Drill.SambaTool)
+	if err != nil {
+		return finish(fmt.Errorf("cannot tell which KDC this host's Samba uses: %w", err))
+	}
+	if err := checkKDC(expect.BackupKDC, kdc); err != nil {
+		return finish(err)
+	}
 	detail := "backup scanned; smb.conf generated (workgroup " + expect.Workgroup
 	if expect.FunctionalLevel != "" {
 		detail += ", functional level " + expect.FunctionalLevel
@@ -407,6 +426,12 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 		run = startSandbox
 	}
 	res, err := run(ctx, d.Exe, specPath, d.ProbePassword, logw)
+	if res.Isolation != "" {
+		rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "sandbox", OK: true, Detail: res.Isolation})
+		if res.Isolation == isolationHostRoot {
+			d.Log.Warn("the restored DC ran without a user namespace (accepted)")
+		}
+	}
 	rep.Drill.Checks = append(rep.Drill.Checks, res.Checks...)
 	rep.Phases["restore"], rep.Phases["start"], rep.Phases["checks"] = res.RestoreMS, res.StartMS, res.ChecksMS
 	if err == nil && res.Error != "" {
@@ -419,6 +444,24 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	// checks (download, verify, decrypt, restore, start, checks).
 	rep.Drill.RTOMS = sandboxStart.Sub(start).Milliseconds() + res.ReadyMS
 	return finish(nil)
+}
+
+// maxReportError bounds the error a report carries: long enough for the
+// refusals that tell the operator what to change (the KDC mismatch, no
+// user namespace), short enough for alerts and conductor's drill history.
+const maxReportError = 600
+
+// truncateError cuts an error message to maxReportError bytes, on a rune
+// boundary.
+func truncateError(msg string) string {
+	if len(msg) <= maxReportError {
+		return msg
+	}
+	cut := maxReportError - len("...")
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + "..."
 }
 
 func download(ctx context.Context, s dest.Store, key, path string) error {

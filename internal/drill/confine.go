@@ -44,19 +44,19 @@ import (
 // inherit all of it. The seccomp filter and no_new_privs are synchronized
 // to every thread of the sandbox.
 //
-// Not done here (see docs/design.md, "Restore drill sandbox"): a user
-// namespace. Samba writes sysvol ACLs into the security.NTACL extended
-// attribute, which needs CAP_SYS_ADMIN in the initial user namespace on a
-// disk file system, so "root" in the sandbox is still root on the host,
-// with the capabilities in keepCaps.
+// The new root is built by host root (stage 1, see userns.go); samba-tool
+// and samba run in it as root of a user namespace (stage 2), so the
+// capabilities below are capabilities in that namespace, not on the host.
+// Only when the operator accepted running without a user namespace do they
+// hold them as host root.
 
 // keepCaps are the capabilities samba-tool and samba keep: file access as
 // root on the restored tree (chown, DAC override and search, fowner,
 // fsetid), signalling their own processes, switching user and group
 // (smbd), binding the DC's ports (53, 88, 389, ...), and CAP_SYS_ADMIN for
-// the security.NTACL attribute of sysvol. Everything else (CAP_NET_ADMIN,
-// CAP_SYS_MODULE, CAP_SYS_PTRACE, CAP_SYS_RAWIO, CAP_MKNOD, CAP_SETPCAP,
-// ...) goes.
+// the security.NTACL attribute of sysvol (on the restore tmpfs the user
+// namespace owns). Everything else (CAP_NET_ADMIN, CAP_SYS_MODULE,
+// CAP_SYS_PTRACE, CAP_SYS_RAWIO, CAP_MKNOD, CAP_SETPCAP, ...) goes.
 var keepCaps = []int{
 	unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_DAC_READ_SEARCH, unix.CAP_FOWNER, unix.CAP_FSETID,
 	unix.CAP_KILL, unix.CAP_SETGID, unix.CAP_SETUID, unix.CAP_NET_BIND_SERVICE, unix.CAP_SYS_ADMIN,
@@ -99,7 +99,15 @@ type rootLayout struct {
 	// Samba configuration directory points at the restored, allowlisted
 	// one, so samba-tool's checks load nothing else).
 	EtcLinks map[string]string
+	// Owner, when set, is the host owner of the user namespace's root:
+	// /run, /tmp and /var become its, and the sandbox's network namespace
+	// lets unprivileged processes bind every port (the DC's are below
+	// 1024, and that namespace is owned by the initial user namespace).
+	Owner *idOwner
 }
+
+// idOwner is a host UID and GID.
+type idOwner struct{ UID, GID int }
 
 // lockedFlags are the mount flags a bind keeps from its source (the kernel
 // refuses to clear them on a remount inside a user namespace, and they
@@ -225,6 +233,13 @@ func buildRoot(l rootLayout) error {
 			return err
 		}
 	}
+	if l.Owner != nil {
+		for _, d := range []string{"run", "tmp", "var"} {
+			if err := chownTree(filepath.Join(r, d), l.Owner.UID, l.Owner.GID); err != nil {
+				return err
+			}
+		}
+	}
 	// A minimal /dev.
 	dev := filepath.Join(r, "dev")
 	if err := os.Mkdir(dev, 0o755); err != nil {
@@ -261,6 +276,13 @@ func buildRoot(l rootLayout) error {
 	if err := unix.Mount("proc", proc, "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return fmt.Errorf("/proc: %w", err)
 	}
+	if l.Owner != nil {
+		// A per-network-namespace knob, written through this fresh /proc
+		// before its sys directory turns read-only.
+		if err := os.WriteFile(filepath.Join(proc, "sys/net/ipv4/ip_unprivileged_port_start"), []byte("0\n"), 0); err != nil {
+			return fmt.Errorf("unprivileged ports: %w", err)
+		}
+	}
 	for _, p := range procReadOnly {
 		pp := filepath.Join(proc, p)
 		if _, err := os.Lstat(pp); err != nil {
@@ -279,9 +301,10 @@ func buildRoot(l rootLayout) error {
 			return fmt.Errorf("mask /proc/%s: %w", p, err)
 		}
 	}
-	// The drill's work directory, read-write, at the same path.
+	// The drill's work directory, read-write, at the same path. The
+	// directories above it are traversable (they hold nothing else).
 	wd := filepath.Join(r, l.WorkDir)
-	if err := os.MkdirAll(wd, 0o700); err != nil {
+	if err := os.MkdirAll(wd, 0o755); err != nil {
 		return err
 	}
 	if err := bind(l.WorkDir, wd, unix.MS_NOSUID|unix.MS_NODEV); err != nil {
@@ -370,11 +393,11 @@ func dropCaps(keep []int) error {
 	return nil
 }
 
-// restrict applies capabilities, no_new_privs, non-dumpable and the
-// seccomp filter to the calling (locked) thread; the filter and
-// no_new_privs are synchronized to every thread.
-func restrict() error {
-	if err := dropCaps(keepCaps); err != nil {
+// restrict cuts the capabilities to keep and applies no_new_privs,
+// non-dumpable and the seccomp filter to the calling (locked) thread; the
+// filter and no_new_privs are synchronized to every thread.
+func restrict(keep []int) error {
+	if err := dropCaps(keep); err != nil {
 		return err
 	}
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
@@ -440,13 +463,13 @@ func readStatus(path string) (threadStatus, error) {
 }
 
 // verifyRestricted checks, from the kernel's point of view, that the
-// calling thread is confined as restrict intended.
-func verifyRestricted() error {
+// calling thread is confined as restrict(keep) intended.
+func verifyRestricted(keep []int) error {
 	s, err := readStatus("/proc/thread-self/status")
 	if err != nil {
 		return err
 	}
-	want := capMask(keepCaps)
+	want := capMask(keep)
 	switch {
 	case s.CapBnd&^want != 0, s.CapEff&^want != 0, s.CapPrm&^want != 0:
 		return fmt.Errorf("capabilities not dropped (bounding %x, effective %x, permitted %x)", s.CapBnd, s.CapEff, s.CapPrm)

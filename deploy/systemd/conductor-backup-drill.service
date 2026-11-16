@@ -1,10 +1,11 @@
 # Restore drills on a drill host (NEVER on a domain controller: the drill
-# identity can decrypt backups). Runs as root: the sandbox needs network,
-# mount and PID namespaces and samba-tool restore needs root. Every drill
-# restores into a fresh, network-less sandbox that pivots into a minimal
-# root, drops capabilities and installs a seccomp filter before anything
-# from the backup runs, and shreds its plaintext (docs/design.md, "Restore
-# drill sandbox"). The directives below confine the whole service on top of
+# identity can decrypt backups). Runs as root: the sandbox's setup needs
+# network, mount and PID namespaces and a user namespace mapped to a range
+# of host IDs. Every drill restores into a fresh, network-less sandbox that
+# pivots into a minimal root and runs samba-tool and Samba as root of that
+# user namespace (no capability on the host), with reduced capabilities and
+# a seccomp filter, before anything from the backup runs, and shreds its
+# plaintext (docs/design.md, "Restore drill sandbox"). The directives below confine the whole service on top of
 # that; each one is compatible with what the sandbox does itself.
 [Unit]
 Description=Samba Conductor restore drill
@@ -26,7 +27,10 @@ UMask=0077
 
 # Capabilities: the sandbox's setup (namespaces, mounts and pivot_root:
 # CAP_SYS_ADMIN; the dummy interface: CAP_NET_ADMIN; dropping the bounding
-# set: CAP_SETPCAP) plus what it keeps for samba-tool and Samba.
+# set: CAP_SETPCAP; the user namespace's ID maps and handing the work
+# directory to its range: CAP_SETUID, CAP_SETGID, CAP_CHOWN) plus what
+# samba-tool and Samba keep inside the user namespace (or, only with
+# drill.accept_no_userns, as host root).
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETPCAP CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_KILL CAP_SETGID CAP_SETUID CAP_NET_BIND_SERVICE
 AmbientCapabilities=
 NoNewPrivileges=yes
@@ -51,9 +55,10 @@ ProtectClock=yes
 # Not ProtectHostname=: it would also forbid the sandbox naming its own
 # UTS namespace (the restored DC's host name).
 
-# Namespaces: only the ones the sandbox creates (no user or cgroup
-# namespaces).
-RestrictNamespaces=net mnt pid uts ipc
+# Namespaces: only the ones the sandbox creates (no cgroup namespace).
+# Removing user from this list makes every drill fail, unless
+# drill.accept_no_userns allows running the restored DC as host root.
+RestrictNamespaces=user net mnt pid uts ipc
 # S3, alerts and the restored DC (IPv4/IPv6, Unix sockets); netlink for
 # the sandbox's interfaces and Samba's interface list.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

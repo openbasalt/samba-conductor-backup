@@ -350,8 +350,9 @@ func NextSteps(r *Result) string {
 	switch {
 	case r.ConductorInstalled:
 		fmt.Fprintf(&b, "  7. conductor: its database is in place (%s). Restore /etc/conductor/conductor.toml from %s/etc/conductor/ and change\n", r.Conductor, r.FilesDir)
-		fmt.Fprintf(&b, "     its [domain] preferred/dcs to %s.%s, put the TOTP key (/etc/conductor/credentials/totp-key) back from where you keep it,\n", strings.ToLower(r.ServerName), domain)
-		b.WriteString("     then: systemctl restart conductor-helper conductor; conductor audit verify\n")
+		fmt.Fprintf(&b, "     its [domain] preferred/dcs to %s.%s, put the TOTP key (/etc/conductor/credentials/totp-key) and the audit key\n", strings.ToLower(r.ServerName), domain)
+		b.WriteString("     (/etc/conductor/credentials/audit-key) back from where you keep them (neither is in the archive),\n")
+		b.WriteString("     then: systemctl restart conductor-helper conductor; sudo conductor audit verify\n")
 	case r.Conductor != "":
 		fmt.Fprintf(&b, "  7. conductor: its database is at %s (install conductor, then copy it to /var/lib/conductor/conductor.db owned by\n", r.Conductor)
 		fmt.Fprintf(&b, "     conductor, and point [domain] preferred/dcs at %s.%s). Without the TOTP key, users enroll 2FA again.\n", strings.ToLower(r.ServerName), domain)
