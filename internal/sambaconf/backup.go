@@ -20,8 +20,9 @@ import (
 )
 
 // sysvolTar is the nested archive `samba-tool domain backup online`
-// writes at the top of its backup (sysvol with its NT ACLs); `backup
-// restore` extracts it with Python's tarfile as well.
+// writes at the top of its backup (the sysvol files, and their NT ACLs
+// when the backup's account could read them); `backup restore` extracts
+// it with Python's tarfile as well.
 const sysvolTar = "sysvol.tar.gz"
 
 // ScanBackup reads a Samba backup file (`samba-tool domain backup`
@@ -57,6 +58,12 @@ type BackupInfo struct {
 	// KDC is the KDC flavour of the Samba build that made the backup
 	// (KDCMIT when the backup carries private/kdc.conf, else KDCHeimdal).
 	KDC string
+	// SysvolNTACLs: the nested sysvol archive carries the NT ACLs
+	// (`<path>.NTACL` members). An online backup taken with an account
+	// that only holds the replication rights cannot read them, so it has
+	// none; the restore then rebuilds them from the directory
+	// (SysvolACLs).
+	SysvolNTACLs bool
 }
 
 // ScanBackupInfo is ScanBackup that also reports the backup's KDC flavour.
@@ -90,7 +97,12 @@ func ScanBackupInfo(file string) (BackupInfo, error) {
 			if err != nil {
 				return fmt.Errorf("%s: %w", sysvolTar, err)
 			}
-			if err := scanTar(z, sysvolTar+": ", nil); err != nil {
+			if err := scanTar(z, sysvolTar+": ", func(name string, _ *tar.Header, _ io.Reader) error {
+				if strings.HasSuffix(name, ntaclSuffix) {
+					info.SysvolNTACLs = true
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
 		}
@@ -218,7 +230,8 @@ func (o RestoreOp) Command() (sambatool.Command, error) {
 // functional level from its smb.conf and writes the configuration samba-tool restores with
 // (configPath, a new 0600 file). It returns the expectation Sanitize
 // checks the restored configuration against, with the backup's KDC flavour
-// (BackupInfo.KDC) in BackupKDC.
+// (BackupInfo.KDC) in BackupKDC and whether it carries the sysvol NT ACLs
+// in SysvolNTACLs.
 func Prepare(backupFile, configPath, netbiosName, realm, targetDir string) (Expect, error) {
 	info, err := ScanBackupInfo(backupFile)
 	if err != nil {
@@ -229,7 +242,7 @@ func Prepare(backupFile, configPath, netbiosName, realm, targetDir string) (Expe
 		return Expect{}, err
 	}
 	e := Expect{NetbiosName: strings.ToUpper(netbiosName), Workgroup: bc.Workgroup, Realm: strings.ToUpper(realm), TargetDir: targetDir,
-		FunctionalLevel: bc.FunctionalLevel, BackupKDC: info.KDC}
+		FunctionalLevel: bc.FunctionalLevel, BackupKDC: info.KDC, SysvolNTACLs: info.SysvolNTACLs}
 	conf, err := Generate(e)
 	if err != nil {
 		return Expect{}, err

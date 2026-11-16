@@ -59,6 +59,9 @@ type SandboxSpec struct {
 	// FunctionalLevel is the backup's "ad dc functional level" (empty when
 	// the backup does not set it).
 	FunctionalLevel string `json:"functional_level,omitempty"`
+	// SysvolNTACLs: the backup carries the sysvol NT ACLs; without them
+	// the sandbox rebuilds them before Samba starts (sambaconf.SysvolACLs).
+	SysvolNTACLs bool `json:"sysvol_ntacls"`
 	// UserNSBase is the first host ID of the user namespace's range
 	// (drill.userns_base; see userns.go).
 	UserNSBase uint32 `json:"userns_base"`
@@ -217,6 +220,11 @@ func runDrill(ctx context.Context, spec SandboxSpec, pw string, start time.Time,
 	if len(conf.Dropped) > 0 {
 		logf("restored smb.conf: dropped %s", strings.Join(conf.Dropped, ", "))
 	}
+	// The sysvol ACLs: rebuilt from the directory when the backup carries
+	// none, then verified (as root of the user namespace, on the restore
+	// tmpfs it owns). A failure is a failed check: the drill fails, the
+	// other checks still run.
+	aclCheck := sysvolACLCheck(ctx, runner, spec)
 	t = time.Now()
 	stop, err := startSamba(spec)
 	if err != nil {
@@ -226,9 +234,23 @@ func runDrill(ctx context.Context, spec SandboxSpec, pw string, start time.Time,
 	defer stop()
 	res.StartMS = time.Since(t).Milliseconds()
 	t = time.Now()
-	res.Checks = runChecks(ctx, spec, pw)
+	res.Checks = append([]helper.DrillCheck{aclCheck}, runChecks(ctx, spec, pw)...)
 	res.ChecksMS = time.Since(t).Milliseconds()
 	res.ReadyMS = time.Since(start).Milliseconds()
+}
+
+// sysvolACLCheckName is the report check of the restored sysvol ACLs.
+const sysvolACLCheckName = "sysvol_acl"
+
+// sysvolACLCheck makes the restored sysvol ACLs right and reports it as
+// the sysvol_acl check (sambaconf.SysvolACLs).
+func sysvolACLCheck(ctx context.Context, r *sambatool.Runner, spec SandboxSpec) helper.DrillCheck {
+	detail, err := sambaconf.SysvolACLs(ctx, r, filepath.Join(spec.TargetDir, "etc", "smb.conf"), spec.SysvolNTACLs)
+	if err != nil {
+		logf("sysvol ACLs: %v", err)
+		return helper.DrillCheck{Name: sysvolACLCheckName, OK: false, Detail: err.Error()}
+	}
+	return helper.DrillCheck{Name: sysvolACLCheckName, OK: true, Detail: detail}
 }
 
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "drill-sandbox: "+format+"\n", a...) }

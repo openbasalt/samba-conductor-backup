@@ -392,7 +392,7 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	if err != nil {
 		return finish(err)
 	}
-	spec.Workgroup, spec.FunctionalLevel = expect.Workgroup, expect.FunctionalLevel
+	spec.Workgroup, spec.FunctionalLevel, spec.SysvolNTACLs = expect.Workgroup, expect.FunctionalLevel, expect.SysvolNTACLs
 	// A backup of a Heimdal build (Debian) on an MIT build (Fedora), or the
 	// reverse, is refused before anything runs (kdc.go).
 	probe := d.hostKDC
@@ -410,7 +410,16 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	if expect.FunctionalLevel != "" {
 		detail += ", functional level " + expect.FunctionalLevel
 	}
-	rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "config", OK: true, Detail: detail + ")"})
+	detail += ")"
+	if expect.SysvolNTACLs {
+		detail += "; sysvol NT ACLs in the backup"
+	} else {
+		// Backups taken with the least-privilege backup account carry
+		// none: the sandbox rebuilds them (sysvol_acl check).
+		detail += "; no sysvol NT ACLs in the backup (rebuilt at restore)"
+		d.Log.Warn("the backup carries no sysvol NT ACLs; the drill rebuilds them from the directory", "backup", b.ID)
+	}
+	rep.Drill.Checks = append(rep.Drill.Checks, helper.DrillCheck{Name: "config", OK: true, Detail: detail})
 	specPath := filepath.Join(work, "sandbox.json")
 	if err := state.WriteJSON(specPath, spec); err != nil {
 		return finish(err)
