@@ -52,10 +52,27 @@ func TestCheckIDMap(t *testing.T) {
 	}
 }
 
+func TestCheckNSRoot(t *testing.T) {
+	if err := checkNSRoot(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	// 65534: the overflow ID an unmapped host ID shows as.
+	for _, c := range [][2]int{{65534, 65534}, {0, 65534}, {65534, 0}, {1000, 1000}} {
+		if checkNSRoot(c[0], c[1]) == nil {
+			t.Errorf("%v accepted", c)
+		}
+	}
+}
+
 func TestInnerSysProcAttr(t *testing.T) {
 	a := innerSysProcAttr(config.DefaultUserNSBase)
 	if a.Cloneflags != syscall.CLONE_NEWUSER|syscall.CLONE_NEWNS || !a.GidMappingsEnableSetgroups || a.Pdeathsig != syscall.SIGKILL {
 		t.Fatalf("%+v", a)
+	}
+	// The child becomes the namespace's root before it executes (else it
+	// keeps the unmapped host UID 0 and execve drops its capabilities).
+	if c := a.Credential; c == nil || c.Uid != 0 || c.Gid != 0 || c.NoSetGroups {
+		t.Fatalf("credential %+v", a.Credential)
 	}
 	want := syscall.SysProcIDMap{ContainerID: 0, HostID: config.DefaultUserNSBase, Size: config.UserNSSize}
 	if len(a.UidMappings) != 1 || a.UidMappings[0] != want || len(a.GidMappings) != 1 || a.GidMappings[0] != want {
@@ -75,6 +92,11 @@ func TestUserNSUnavailable(t *testing.T) {
 		if userNSUnavailable(e) {
 			t.Errorf("%v classified as unavailable", e)
 		}
+	}
+	// As runInner reports it: the reason is said once.
+	wrapped := noUserNSError(fmt.Errorf("%w: %v", errNoUserNS, unix.ENOSPC)).Error()
+	if strings.Count(wrapped, errNoUserNS.Error()) != 1 || !strings.Contains(wrapped, unix.ENOSPC.Error()) {
+		t.Fatalf("message %q", wrapped)
 	}
 	msg := noUserNSError(unix.EPERM).Error()
 	if !errors.Is(noUserNSError(unix.EPERM), errNoUserNS) || !strings.Contains(msg, "accept_no_userns") || !strings.Contains(msg, "--accept-no-userns") {

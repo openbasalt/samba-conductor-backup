@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"filippo.io/age"
 	"github.com/openbasalt/samba-conductor-ad/helper"
@@ -315,7 +317,9 @@ func TestDrillRefusesKDCMismatch(t *testing.T) {
 		f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
 		rep, err := f.d.Run(context.Background(), Options{Force: true})
 		if c.wantRefuse {
-			if err == nil || rep.Drill.Passed || called || !strings.Contains(rep.Drill.Error, "unsupported drill") {
+			// The whole message, remedy included, reaches the report.
+			if err == nil || rep.Drill.Passed || called || !strings.Contains(rep.Drill.Error, "unsupported drill") ||
+				!strings.HasSuffix(rep.Drill.Error, "drill on a host whose Samba build matches the DC's") {
 				t.Errorf("%s: %v %+v (sandbox called: %v)", c.name, err, rep.Drill, called)
 			}
 			continue
@@ -369,5 +373,24 @@ func TestDrillAcceptNoUserNS(t *testing.T) {
 	f.d.Cfg.Drill.AcceptNoUserNS = true
 	if _, err := f.d.Run(context.Background(), Options{Force: true, BackupID: "20261003T023000Z-dc1"}); err != nil || !f.spec.AcceptNoUserNS {
 		t.Fatalf("config: %v %+v", err, f.spec)
+	}
+}
+
+// TestTruncateError: the refusals that name a remedy fit in a report; longer
+// messages are cut on a rune boundary.
+func TestTruncateError(t *testing.T) {
+	for _, msg := range []string{
+		checkKDC(sambaconf.KDCHeimdal, sambaconf.KDCMIT).Error(),
+		checkKDC(sambaconf.KDCMIT, sambaconf.KDCHeimdal).Error(),
+		noUserNSError(&os.SyscallError{Syscall: "fork/exec /proc/self/exe", Err: syscall.EPERM}).Error(),
+	} {
+		if got := truncateError(msg); got != msg {
+			t.Errorf("cut: %q", got)
+		}
+	}
+	long := strings.Repeat("é", maxReportError)
+	got := truncateError(long)
+	if len(got) > maxReportError || !strings.HasSuffix(got, "...") || !utf8.ValidString(got) {
+		t.Fatalf("%d bytes, valid %v", len(got), utf8.ValidString(got))
 	}
 }

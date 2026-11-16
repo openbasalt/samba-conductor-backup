@@ -23,6 +23,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"filippo.io/age"
 	"github.com/openbasalt/samba-conductor-ad/helper"
@@ -306,10 +307,7 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	finish := func(err error) *manifest.DrillReport {
 		rep.Drill.FinishedAt = d.now()
 		if err != nil {
-			rep.Drill.Error = err.Error()
-			if len(rep.Drill.Error) > 200 {
-				rep.Drill.Error = rep.Drill.Error[:197] + "..."
-			}
+			rep.Drill.Error = truncateError(err.Error())
 		}
 		rep.Drill.Passed = err == nil && len(rep.Drill.Checks) > 0
 		for _, c := range rep.Drill.Checks {
@@ -446,6 +444,24 @@ func (d *Drill) drill(ctx context.Context, list []runner.Listed, backupID string
 	// checks (download, verify, decrypt, restore, start, checks).
 	rep.Drill.RTOMS = sandboxStart.Sub(start).Milliseconds() + res.ReadyMS
 	return finish(nil)
+}
+
+// maxReportError bounds the error a report carries: long enough for the
+// refusals that tell the operator what to change (the KDC mismatch, no
+// user namespace), short enough for alerts and conductor's drill history.
+const maxReportError = 600
+
+// truncateError cuts an error message to maxReportError bytes, on a rune
+// boundary.
+func truncateError(msg string) string {
+	if len(msg) <= maxReportError {
+		return msg
+	}
+	cut := maxReportError - len("...")
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + "..."
 }
 
 func download(ctx context.Context, s dest.Store, key, path string) error {

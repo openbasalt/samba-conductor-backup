@@ -71,11 +71,16 @@ func userNSUnavailable(err error) bool {
 }
 
 // noUserNSError is the message of a drill that could not get its user
-// namespace and was not allowed to run without one.
+// namespace and was not allowed to run without one. err is the cause,
+// already wrapping errNoUserNS (runInner) or not.
 func noUserNSError(err error) error {
-	return fmt.Errorf("%w (%v); the drill refuses to run the restored DC as host root. Allow user namespaces for "+
-		"conductor-backup-drill.service (RestrictNamespaces= must include user; user.max_user_namespaces > 0), or accept "+
-		"the weaker sandbox with drill.accept_no_userns = true or `drill --accept-no-userns`", errNoUserNS, err)
+	const remedy = "; the drill refuses to run the restored DC as host root. Allow user namespaces for " +
+		"conductor-backup-drill.service (RestrictNamespaces= must include user; user.max_user_namespaces > 0), or accept " +
+		"the weaker sandbox with drill.accept_no_userns = true or `drill --accept-no-userns`"
+	if errors.Is(err, errNoUserNS) {
+		return fmt.Errorf("%w"+remedy, err)
+	}
+	return fmt.Errorf("%w (%v)"+remedy, errNoUserNS, err)
 }
 
 // chownTree gives every entry under root (root included) to uid:gid,
@@ -131,7 +136,8 @@ func checkIDMap(m []idRange, base uint32, size uint64) error {
 }
 
 // verifyUserNS checks, from the kernel's view, that this process runs in
-// the drill's user namespace: its root is not host root.
+// the drill's user namespace (its root is not host root) as that
+// namespace's root.
 func verifyUserNS(base uint32) error {
 	for _, f := range []string{"/proc/self/uid_map", "/proc/self/gid_map"} {
 		b, err := os.ReadFile(f)
@@ -146,15 +152,30 @@ func verifyUserNS(base uint32) error {
 			return fmt.Errorf("%s: %w", f, err)
 		}
 	}
+	return checkNSRoot(os.Getuid(), os.Getgid())
+}
+
+// checkNSRoot accepts only the user namespace's root (ID 0 inside, the
+// range's base on the host). A process that entered the namespace without
+// switching to it keeps an unmapped host ID (the overflow ID inside) and
+// loses its capabilities at execve.
+func checkNSRoot(uid, gid int) error {
+	if uid != 0 || gid != 0 {
+		return fmt.Errorf("running as %d:%d in the user namespace, not as its root", uid, gid)
+	}
 	return nil
 }
 
 // innerSysProcAttr starts stage 2: a new user namespace mapped onto the
-// drill's range and a mount namespace it owns.
+// drill's range and a mount namespace it owns. The child switches to the
+// namespace's root (Credential: setgroups, setgid and setuid to 0 once the
+// maps are written) before it executes: cloned into the namespace it still
+// holds host UID 0, which is not mapped there, so execve would drop its
+// capabilities and it would be "other" on the work directory it was given.
 func innerSysProcAttr(base uint32) *syscall.SysProcAttr {
 	m := []syscall.SysProcIDMap{{ContainerID: 0, HostID: int(base), Size: config.UserNSSize}}
 	return &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS, UidMappings: m, GidMappings: m,
-		GidMappingsEnableSetgroups: true, Pdeathsig: syscall.SIGKILL}
+		GidMappingsEnableSetgroups: true, Credential: &syscall.Credential{Uid: 0, Gid: 0}, Pdeathsig: syscall.SIGKILL}
 }
 
 // runInner is stage 1's part once the new root is in place: start stage 2
