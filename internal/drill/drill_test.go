@@ -19,6 +19,7 @@ import (
 	"github.com/openbasalt/samba-conductor-backup/internal/config"
 	"github.com/openbasalt/samba-conductor-backup/internal/dest"
 	"github.com/openbasalt/samba-conductor-backup/internal/manifest"
+	"github.com/openbasalt/samba-conductor-backup/internal/sambaconf"
 	"github.com/openbasalt/samba-conductor-backup/internal/sign"
 )
 
@@ -31,6 +32,8 @@ type fixture struct {
 	spec    SandboxSpec
 	// samba replaces the Samba backup file of the next putBackup.
 	samba []byte
+	// hostKDC is the KDC flavour the drill host reports.
+	hostKDC string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -38,7 +41,7 @@ func newFixture(t *testing.T) *fixture {
 	root := t.TempDir()
 	cfg := &config.Config{Realm: "LAB.TEST", Destinations: []config.Destination{{Name: "local", Type: "local", Path: filepath.Join(root, "bucket")}},
 		Drill: config.Drill{WorkDir: filepath.Join(root, "work"), ServerName: "DRILL", ProbeUser: "svc-drill-probe", TimeoutMinutes: 5,
-			SambaBinary: "/usr/sbin/samba", SambaTool: "/usr/bin/samba-tool"}}
+			SambaBinary: "/usr/sbin/samba", SambaTool: "/usr/bin/samba-tool", UserNSBase: config.DefaultUserNSBase}}
 	store, _ := dest.Open(cfg, cfg.Destinations[0])
 	dcKey, _ := sign.Generate()
 	drillKey, _ := sign.Generate()
@@ -56,8 +59,10 @@ func newFixture(t *testing.T) *fixture {
 			return SandboxResult{}, err
 		}
 		return SandboxResult{Checks: []helper.DrillCheck{{Name: "ldap", OK: true}, {Name: "users", OK: true, Detail: "3 users"}},
-			RestoreMS: 1000, StartMS: 500, ChecksMS: 700, ReadyMS: 2300}, nil
+			RestoreMS: 1000, StartMS: 500, ChecksMS: 700, ReadyMS: 2300, Isolation: isolationUserNS}, nil
 	}
+	f.d.hostKDC = func(context.Context, string) (string, error) { return f.hostKDC, nil }
+	f.hostKDC = sambaconf.KDCHeimdal
 	return f
 }
 
@@ -101,14 +106,26 @@ func (f *fixture) sambaFile() []byte {
 }
 
 // sambaBackup is a minimal Samba backup file (tar; samba-tool and the
-// scan detect the compression).
+// scan detect the compression), as a Heimdal build (Debian) makes it.
 func sambaBackup(extra string) []byte {
+	return sambaBackupKDC(extra, false)
+}
+
+// sambaBackupKDC is sambaBackup, as an MIT build (Fedora) makes it when
+// mit is set (with private/kdc.conf).
+func sambaBackupKDC(extra string, mit bool) []byte {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	conf := []byte("[global]\n\tnetbios name = DC1\n\trealm = LAB.TEST\n\tworkgroup = LAB\n" + extra)
 	_ = tw.WriteHeader(&tar.Header{Name: "./etc", Mode: 0o755, Typeflag: tar.TypeDir})
 	_ = tw.WriteHeader(&tar.Header{Name: "./etc/smb.conf", Mode: 0o644, Size: int64(len(conf)), Typeflag: tar.TypeReg})
 	_, _ = tw.Write(conf)
+	if mit {
+		kdc := []byte("[kdcdefaults]\n")
+		_ = tw.WriteHeader(&tar.Header{Name: "./private", Mode: 0o700, Typeflag: tar.TypeDir})
+		_ = tw.WriteHeader(&tar.Header{Name: "./private/kdc.conf", Mode: 0o644, Size: int64(len(kdc)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write(kdc)
+	}
 	_ = tw.Close()
 	return buf.Bytes()
 }
@@ -149,6 +166,13 @@ func TestDrillOnRequest(t *testing.T) {
 	}
 	if c := rep.Drill.Checks[1]; c.Name != "config" || !strings.Contains(c.Detail, "functional level 2016") {
 		t.Fatalf("config check %+v", c)
+	}
+	// The sandbox runs in a user namespace on the configured range.
+	if c := rep.Drill.Checks[2]; c.Name != "sandbox" || !c.OK || c.Detail != isolationUserNS {
+		t.Fatalf("sandbox check %+v", c)
+	}
+	if f.spec.UserNSBase != config.DefaultUserNSBase || f.spec.AcceptNoUserNS {
+		t.Fatalf("spec user namespace %+v", f.spec)
 	}
 	// Plaintext removed.
 	if entries, _ := os.ReadDir(f.d.Cfg.Drill.WorkDir); len(entries) > 3 {
@@ -261,5 +285,89 @@ func TestDrillRollback(t *testing.T) {
 	}
 	if m, err := ReadMark(f.d.Cfg.Drill.WorkDir); err != nil || m == nil || m.ID != "20261002T023000Z-dc1" {
 		t.Fatalf("mark %v %v", m, err)
+	}
+}
+
+// TestDrillRefusesKDCMismatch: a backup of a Heimdal build drilled on an
+// MIT build (and the reverse) is refused before the sandbox starts, with
+// the reason in the report. Matching flavours pass.
+func TestDrillRefusesKDCMismatch(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		backupMIT  bool
+		host       string
+		wantRefuse bool
+	}{
+		{"debian backup on fedora", false, sambaconf.KDCMIT, true},
+		{"fedora backup on debian", true, sambaconf.KDCHeimdal, true},
+		{"fedora backup on fedora", true, sambaconf.KDCMIT, false},
+		{"debian backup on debian", false, sambaconf.KDCHeimdal, false},
+	} {
+		f := newFixture(t)
+		called := false
+		inner := f.d.sandbox
+		f.d.sandbox = func(ctx context.Context, exe, spec, pw string, w io.Writer) (SandboxResult, error) {
+			called = true
+			return inner(ctx, exe, spec, pw, w)
+		}
+		f.hostKDC = c.host
+		f.samba = sambaBackupKDC("", c.backupMIT)
+		f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
+		rep, err := f.d.Run(context.Background(), Options{Force: true})
+		if c.wantRefuse {
+			if err == nil || rep.Drill.Passed || called || !strings.Contains(rep.Drill.Error, "unsupported drill") {
+				t.Errorf("%s: %v %+v (sandbox called: %v)", c.name, err, rep.Drill, called)
+			}
+			continue
+		}
+		if err != nil || !rep.Drill.Passed || !called {
+			t.Errorf("%s: %v %+v", c.name, err, rep.Drill)
+		}
+	}
+}
+
+// TestDrillKDCUnknown: a host whose KDC flavour cannot be told fails the
+// drill (closed) before the sandbox starts.
+func TestDrillKDCUnknown(t *testing.T) {
+	f := newFixture(t)
+	called := false
+	f.d.sandbox = func(context.Context, string, string, string, io.Writer) (SandboxResult, error) {
+		called = true
+		return SandboxResult{}, nil
+	}
+	f.d.hostKDC = func(context.Context, string) (string, error) { return "", errors.New("no samba module") }
+	f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
+	rep, err := f.d.Run(context.Background(), Options{Force: true})
+	if err == nil || rep.Drill.Passed || called || !strings.Contains(rep.Drill.Error, "which KDC") {
+		t.Fatalf("%v %+v (sandbox called: %v)", err, rep.Drill, called)
+	}
+}
+
+// TestDrillAcceptNoUserNS: the opt-out reaches the sandbox from the flag
+// or the configuration, and a drill that ran without a user namespace says
+// so in its checks.
+func TestDrillAcceptNoUserNS(t *testing.T) {
+	f := newFixture(t)
+	f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
+	inner := f.d.sandbox
+	f.d.sandbox = func(ctx context.Context, exe, spec, pw string, w io.Writer) (SandboxResult, error) {
+		res, err := inner(ctx, exe, spec, pw, w)
+		res.Isolation = isolationHostRoot
+		return res, err
+	}
+	rep, err := f.d.Run(context.Background(), Options{Force: true, AcceptNoUserNS: true})
+	if err != nil || !f.spec.AcceptNoUserNS {
+		t.Fatalf("flag: %v %+v", err, f.spec)
+	}
+	found := false
+	for _, c := range rep.Drill.Checks {
+		found = found || (c.Name == "sandbox" && c.Detail == isolationHostRoot)
+	}
+	if !found {
+		t.Fatalf("checks %+v", rep.Drill.Checks)
+	}
+	f.d.Cfg.Drill.AcceptNoUserNS = true
+	if _, err := f.d.Run(context.Background(), Options{Force: true, BackupID: "20261003T023000Z-dc1"}); err != nil || !f.spec.AcceptNoUserNS {
+		t.Fatalf("config: %v %+v", err, f.spec)
 	}
 }

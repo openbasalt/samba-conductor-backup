@@ -57,7 +57,8 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
 - Restore drills (`drill`, on a drill host, never a DC): the newest backup
   is restored into a sandbox with no network (new network, mount, PID,
   UTS and IPC namespaces; loopback and a dummy interface only), a minimal
-  root of its own (no credentials in it), reduced capabilities,
+  root of its own (no credentials in it), a user namespace mapped to
+  unprivileged host IDs (no capability on the host), reduced capabilities,
   `no_new_privs` and a seccomp filter, started, and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
   probe account works, the user count matches the source, sample SIDs are
   unchanged. The plaintext is shredded, the measured restore time (RTO) and
@@ -233,7 +234,7 @@ conductor-backup list [--destination N]
 conductor-backup verify ID|latest           # download + SHA-256, no decryption
 conductor-backup prune [--dry-run]
 conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP] [--accept-older]
-conductor-backup drill [--now] [--backup ID] [--accept-older]
+conductor-backup drill [--now] [--backup ID] [--accept-older] [--accept-no-userns]
 conductor-backup keygen signing|age --out FILE
 conductor-backup pubkey FILE
 ```
@@ -261,6 +262,18 @@ before risky local maintenance.
   backup; objects the probe account cannot read would count as missing.
 - The probe account's password in a restored copy is the one it had at
   backup time.
+- Drills need the drill host's Samba to use the same KDC as the DCs':
+  a backup of a Debian DC (Heimdal) on a Fedora drill host (MIT
+  Kerberos), or the reverse, is not supported and the drill refuses it
+  (docs/design.md, "KDC flavours").
+- Drills need user namespaces on the drill host (the restored DC runs as
+  root of one, mapped to unprivileged host IDs). Without them every drill
+  fails, unless `drill.accept_no_userns = true` or `--accept-no-userns`
+  accepts running it as host root with reduced capabilities.
+- conductor's TOTP key and audit key (`/etc/conductor/credentials/totp-key`
+  and `/etc/conductor/credentials/audit-key`) are not in the archive: keep
+  copies with the offline key and put them back after a restore, then run
+  `sudo conductor audit verify`.
 
 ## Development
 

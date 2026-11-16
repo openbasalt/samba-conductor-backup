@@ -2,8 +2,9 @@
 # A drill host is NOT a domain controller: it holds the drill age identity
 # (backups are also encrypted to it), reads the bucket, restores the newest
 # backup into a network-less sandbox and reports the result, signed.
-# Requirements: samba-ad-dc packages installed (services disabled),
-# iproute2, root.
+# Requirements: samba-ad-dc packages installed (services disabled) from
+# the same distribution family as the DCs (see "KDC flavours" in
+# docs/design.md), iproute2, user namespaces, root.
 
 realm = "EXAMPLE.COM"
 # The DC's public signing key (`conductor-backup pubkey` on the DC):
@@ -24,13 +25,20 @@ identity = "drill-identity"             # credential: AGE-SECRET-KEY-…
 signing_key = "drill-signing-key"       # credential: signs the reports
 probe_user = "svc-drill-probe"          # a plain domain user (no rights)
 probe_password = "drill-probe-password" # credential
-# work_dir = "/var/lib/conductor-backup-drill"   # on disk (sysvol ACLs need xattrs)
+# work_dir = "/var/lib/conductor-backup-drill"
 # server_name = "DRILL"
 # destination = "s3"
 # Alert when the newest backup in the bucket is older than this (an
 # off-DC watchdog; 0 = off).
 max_backup_age_hours = 30
 # timeout_minutes = 30
+# The restored DC runs as root of a user namespace whose IDs 0-4194303 map
+# to host IDs from userns_base (nothing else may use that range). A host
+# that cannot create user namespaces fails every drill unless
+# accept_no_userns = true (the restored DC then runs as host root with
+# reduced capabilities; same as `drill --accept-no-userns`).
+# userns_base = 1879048192
+# accept_no_userns = false
 
 [alert]
 email_to = ["ops@example.com"]

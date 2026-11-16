@@ -167,8 +167,10 @@ func confineChild(dir string) childResult {
 		fail("%v", err)
 		return r
 	}
+	// Owner: this namespace's root (the drill hands /run, /tmp and /var to
+	// the mapped range the same way).
 	if err := confine(rootLayout{Root: filepath.Join(work, ".root"), WorkDir: work, EtcFiles: map[string]string{"resolv.conf": resolv},
-		EtcLinks: map[string]string{"samba": filepath.Join(work, "restore", "etc")}}); err != nil {
+		EtcLinks: map[string]string{"samba": filepath.Join(work, "restore", "etc")}, Owner: &idOwner{UID: 0, GID: 0}}); err != nil {
 		fail("confine: %v", err)
 		return r
 	}
@@ -201,13 +203,24 @@ func confineChild(dir string) childResult {
 			fail("%s writable", ro)
 		}
 	}
+	// Unprivileged processes may bind the DC's ports in the sandbox's
+	// network namespace (stage 2 has no capability in it).
+	if b, err := os.ReadFile("/proc/sys/net/ipv4/ip_unprivileged_port_start"); err != nil || strings.TrimSpace(string(b)) != "0" {
+		fail("ip_unprivileged_port_start %q %v", b, err)
+	}
+	for _, d := range []string{"/run/samba", "/var/lib/samba", "/tmp"} {
+		var st unix.Stat_t
+		if err := unix.Lstat(d, &st); err != nil || st.Uid != 0 || st.Gid != 0 {
+			fail("%s owner %d:%d %v", d, st.Uid, st.Gid, err)
+		}
+	}
 	if f, err := os.OpenFile("/dev/null", os.O_WRONLY, 0); err != nil {
 		fail("/dev/null: %v", err)
 	} else {
 		_ = f.Close()
 	}
 	// Privileges, from the kernel's view, here and in a child.
-	if err := verifyRestricted(); err != nil {
+	if err := verifyRestricted(keepCaps); err != nil {
 		fail("verify: %v", err)
 	}
 	checkDenied(&r)

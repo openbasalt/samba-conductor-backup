@@ -28,9 +28,11 @@ import (
 // network, mount, PID, UTS and IPC namespaces. Its network namespace has
 // only a loopback and a dummy interface (192.0.2.10, TEST-NET-1), so the
 // restored domain controller has no path to anything: not the real DCs,
-// not the bucket. It then pivots into a minimal root of its own and drops
-// privileges before anything from the backup runs (confine.go). When it
-// exits, the kernel kills whatever is left in its PID namespace.
+// not the bucket. It then pivots into a minimal root of its own and runs
+// samba-tool and Samba as root of a user namespace mapped to unprivileged
+// host IDs (userns.go), with reduced capabilities, no_new_privs and a
+// seccomp filter (confine.go). When it exits, the kernel kills whatever is
+// left in its PID namespace.
 
 // sandboxIP is the restored DC's address inside the sandbox.
 const sandboxIP = "192.0.2.10"
@@ -57,6 +59,12 @@ type SandboxSpec struct {
 	// FunctionalLevel is the backup's "ad dc functional level" (empty when
 	// the backup does not set it).
 	FunctionalLevel string `json:"functional_level,omitempty"`
+	// UserNSBase is the first host ID of the user namespace's range
+	// (drill.userns_base; see userns.go).
+	UserNSBase uint32 `json:"userns_base"`
+	// AcceptNoUserNS lets the drill run without a user namespace when the
+	// host cannot create one.
+	AcceptNoUserNS bool `json:"accept_no_userns,omitempty"`
 }
 
 // expect is what the restored smb.conf must say.
@@ -74,6 +82,9 @@ type SandboxResult struct {
 	// ReadyMS: from the sandbox's start until every check passed.
 	ReadyMS int64  `json:"ready_ms"`
 	Error   string `json:"error,omitempty"`
+	// Isolation says how the restored DC ran (a user namespace, or host
+	// root when the operator accepted that).
+	Isolation string `json:"isolation,omitempty"`
 }
 
 // sandboxFlags are the namespaces of the sandbox.
@@ -96,7 +107,7 @@ func startSandbox(ctx context.Context, exe, specPath, probePassword string, logw
 	defer func() { _ = r.Close() }()
 	var out strings.Builder
 	cmd := exec.CommandContext(ctx, exe, "drill-sandbox", specPath)
-	cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
+	cmd.Env = sandboxEnv
 	cmd.ExtraFiles = []*os.File{r}
 	cmd.Stdout = &out
 	cmd.Stderr = logw
@@ -111,8 +122,9 @@ func startSandbox(ctx context.Context, exe, specPath, probePassword string, logw
 	return res, nil
 }
 
-// RunSandbox is the body of `conductor-backup drill-sandbox SPEC`. It
-// prints a SandboxResult on stdout and returns the exit code.
+// RunSandbox is the body of `conductor-backup drill-sandbox SPEC` (stage 1,
+// see userns.go). It prints a SandboxResult on stdout and returns the exit
+// code.
 func RunSandbox(specPath string) int {
 	start := time.Now()
 	res := SandboxResult{}
@@ -127,45 +139,80 @@ func RunSandbox(specPath string) int {
 		res.Error = "drill-sandbox must be started by `conductor-backup drill` (new PID namespace)"
 		return emit()
 	}
-	b, err := os.ReadFile(specPath)
+	spec, pw, err := readSpec(specPath)
 	if err != nil {
 		res.Error = err.Error()
 		return emit()
 	}
-	var spec SandboxSpec
-	if err := json.Unmarshal(b, &spec); err != nil {
-		res.Error = "spec: " + err.Error()
-		return emit()
-	}
-	pw, err := io.ReadAll(io.LimitReader(os.NewFile(3, "probe-password"), 4096))
-	if err != nil || len(pw) == 0 {
-		res.Error = "probe password not received"
-		return emit()
-	}
-	timeout := time.Duration(spec.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 20 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), spec.timeout())
 	defer cancel()
 	if err := isolate(spec); err != nil {
 		res.Error = "isolation: " + err.Error()
 		return emit()
 	}
+	inner, err := runInner(ctx, specPath, spec.UserNSBase, pw, start)
+	switch {
+	case err == nil:
+		return emitResult(inner)
+	case errors.Is(err, errNoUserNS) && spec.AcceptNoUserNS:
+		logf("%v; running without one (accepted)", err)
+	case errors.Is(err, errNoUserNS):
+		res.Error = noUserNSError(err).Error()
+		return emit()
+	default:
+		res.Error = err.Error()
+		return emit()
+	}
+	// No user namespace, by the operator's choice: this process confines
+	// itself (host root with keepCaps) and runs the drill.
+	res.Isolation = isolationHostRoot
+	if err := restrict(keepCaps); err != nil {
+		res.Error = "isolation: " + err.Error()
+		return emit()
+	}
+	if err := verifyRestricted(keepCaps); err != nil {
+		res.Error = "isolation: " + err.Error()
+		return emit()
+	}
+	runDrill(ctx, spec, string(pw), start, &res)
+	return emit()
+}
+
+// emitResult prints a result and returns its exit code.
+func emitResult(res SandboxResult) int {
+	_ = json.NewEncoder(os.Stdout).Encode(res)
+	if res.Error != "" {
+		return 1
+	}
+	return 0
+}
+
+// timeout bounds the sandbox.
+func (s SandboxSpec) timeout() time.Duration {
+	if s.TimeoutSeconds <= 0 {
+		return 20 * time.Minute
+	}
+	return time.Duration(s.TimeoutSeconds) * time.Second
+}
+
+// runDrill restores the backup, starts Samba from the allowlisted
+// configuration and runs the checks, recording everything in res. The
+// caller has confined the process.
+func runDrill(ctx context.Context, spec SandboxSpec, pw string, start time.Time, res *SandboxResult) {
 	t := time.Now()
 	runner := &sambatool.Runner{Binary: spec.SambaTool, Credentials: sambatool.LocalSystem{}, Timeout: 20 * time.Minute}
 	if _, err := sambatool.Run(ctx, runner, sambaconf.RestoreOp{DomainBackupRestore: sambatool.DomainBackupRestore{BackupFile: spec.BackupFile,
 		TargetDir: spec.TargetDir, NewServerName: spec.ServerName, HostIP: sandboxIP}, ConfigFile: spec.ConfigFile}); err != nil {
 		res.Error = "samba-tool domain backup restore failed"
 		logf("restore: %v", err)
-		return emit()
+		return
 	}
 	res.RestoreMS = time.Since(t).Milliseconds()
 	// Samba starts only from the allowlisted configuration.
 	conf, err := sambaconf.Finalize(spec.expect())
 	if err != nil {
 		res.Error = "restored smb.conf: " + err.Error()
-		return emit()
+		return
 	}
 	if len(conf.Dropped) > 0 {
 		logf("restored smb.conf: dropped %s", strings.Join(conf.Dropped, ", "))
@@ -174,31 +221,46 @@ func RunSandbox(specPath string) int {
 	stop, err := startSamba(spec)
 	if err != nil {
 		res.Error = "starting samba: " + err.Error()
-		return emit()
+		return
 	}
 	defer stop()
 	res.StartMS = time.Since(t).Milliseconds()
 	t = time.Now()
-	res.Checks = runChecks(ctx, spec, string(pw))
+	res.Checks = runChecks(ctx, spec, pw)
 	res.ChecksMS = time.Since(t).Milliseconds()
 	res.ReadyMS = time.Since(start).Milliseconds()
-	return emit()
 }
 
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "drill-sandbox: "+format+"\n", a...) }
 
 // isolate prepares the namespaces: private mounts, loopback + dummy
-// network, host name; then confines the sandbox (confine.go): new root,
-// capabilities, no_new_privs, seccomp. Any layer that cannot be set up
-// fails the drill.
+// network, host name, the work directory handed to the user namespace's
+// range; then enters the new root (confine.go). The capabilities,
+// no_new_privs and seccomp come after (RunSandbox, runInner). Any layer
+// that cannot be set up fails the drill.
 func isolate(spec SandboxSpec) error {
 	if tid, pid := unix.Gettid(), unix.Getpid(); tid != pid {
 		// The confinement is applied to this thread and inherited by the
 		// children it starts: it must be the locked main thread.
 		return fmt.Errorf("not on the main thread (tid %d, pid %d)", tid, pid)
 	}
+	if spec.UserNSBase == 0 {
+		return errors.New("no user namespace range in the spec")
+	}
+	// The new root and the generated files must be readable by the user
+	// namespace's root, which is not host root: the service's umask (0077)
+	// would hide them. Nothing secret is created with it: the work
+	// directory stays 0700.
+	unix.Umask(0o022)
 	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("private mounts: %w", err)
+	}
+	owner := &idOwner{UID: int(spec.UserNSBase), GID: int(spec.UserNSBase)}
+	// The user namespace's root works in the work directory (the decrypted
+	// backup, the spec, the generated smb.conf): it becomes its owner. The
+	// directory above it stays host root's, 0700.
+	if err := chownTree(spec.WorkDir, owner.UID, owner.GID); err != nil {
+		return fmt.Errorf("work directory: %w", err)
 	}
 	host := strings.ToLower(spec.ServerName)
 	etc := map[string]string{}
@@ -226,9 +288,12 @@ func isolate(spec SandboxSpec) error {
 			return fmt.Errorf("ip %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
-	return confine(rootLayout{Root: filepath.Join(spec.WorkDir, ".root"), WorkDir: spec.WorkDir, EtcFiles: etc,
-		EtcLinks: map[string]string{"samba": filepath.Join(spec.TargetDir, "etc")}})
+	return enterRoot(rootLayout{Root: filepath.Join(spec.WorkDir, ".root"), WorkDir: spec.WorkDir, EtcFiles: etc,
+		EtcLinks: map[string]string{"samba": filepath.Join(spec.TargetDir, "etc")}, Owner: owner})
 }
+
+// sandboxEnv is the environment of every process the sandbox starts.
+var sandboxEnv = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
 
 // sandboxEtcFiles are the generated files of the sandbox's /etc: the
 // resolver and hosts point at the restored DC, and krb5.conf names its
@@ -248,19 +313,24 @@ func sandboxEtcFiles(spec SandboxSpec) map[string]string {
 	}
 }
 
-// confine builds the new root, pivots into it and drops privileges, then
-// checks the result as the kernel reports it.
-func confine(l rootLayout) error {
+// enterRoot builds the new root and pivots into it.
+func enterRoot(l rootLayout) error {
 	if err := buildRoot(l); err != nil {
 		return fmt.Errorf("new root: %w", err)
 	}
-	if err := pivot(l.Root); err != nil {
+	return pivot(l.Root)
+}
+
+// confine enters the new root and drops privileges to keepCaps, then
+// checks the result as the kernel reports it.
+func confine(l rootLayout) error {
+	if err := enterRoot(l); err != nil {
 		return err
 	}
-	if err := restrict(); err != nil {
+	if err := restrict(keepCaps); err != nil {
 		return err
 	}
-	return verifyRestricted()
+	return verifyRestricted(keepCaps)
 }
 
 // writeNew creates a file that must not exist yet (never through a link).
@@ -293,7 +363,7 @@ func startSamba(spec SandboxSpec) (func(), error) {
 		return nil, err
 	}
 	cmd := exec.Command(spec.SambaBinary, "-s", filepath.Join(spec.TargetDir, "etc", "smb.conf"), "-i", "--debug-stdout", "-d1")
-	cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
+	cmd.Env = sandboxEnv
 	cmd.Stdout, cmd.Stderr = lf, lf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

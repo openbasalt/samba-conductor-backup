@@ -50,8 +50,11 @@ conductor-backup.path`.
   drop-in the policy package installs
   (`/usr/lib/systemd/system/conductor-backup-drill.service.d/selinux.conf`):
   the drill builds its own namespaces and mounts and runs `samba-tool
-  restore` and `samba` as root inside a network-less sandbox. The unit's own
-  systemd sandbox still applies.
+  restore` and `samba` as root of a user namespace (unprivileged host IDs)
+  inside a network-less sandbox. The unit's own systemd sandbox still
+  applies. A Fedora drill host drills backups of Fedora DCs only (MIT
+  Kerberos KDC); a backup of a Debian DC is refused (docs/design.md, "KDC
+  flavours").
 
 ## Upgrade and removal
 

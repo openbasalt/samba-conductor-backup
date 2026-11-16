@@ -205,6 +205,11 @@ type Expect struct {
 	// FunctionalLevel is the backup's "ad dc functional level" (one of
 	// functionalLevels), or empty when the backup does not set it.
 	FunctionalLevel string
+	// BackupKDC is the KDC flavour of the build that made the backup
+	// (KDCHeimdal or KDCMIT, set by Prepare). It plays no part in the
+	// smb.conf checks: the drill refuses a backup whose flavour differs
+	// from the drill host's.
+	BackupKDC string
 }
 
 // Validate checks the expectation itself.

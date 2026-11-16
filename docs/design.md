@@ -190,9 +190,15 @@ while others live, accidental deletion, key loss) are in the
 - Each drill restores the newest backup into a sandbox started by
   conductor-backup in new network, mount, PID, UTS and IPC namespaces
   (loopback and one dummy interface), confined to a minimal root of its
-  own with reduced privileges before anything from the backup runs (see
-  "Restore drill sandbox" below). The kernel kills whatever is left when
-  it exits. The drill host itself should have no route to the DCs.
+  own, where samba-tool and Samba run as root of a user namespace mapped
+  to unprivileged host IDs, with reduced privileges, before anything from
+  the backup runs (see "Restore drill sandbox" below). The kernel kills
+  whatever is left when it exits. The drill host itself should have no
+  route to the DCs.
+- The drill host's Samba must use the same KDC as the DCs' (see "KDC
+  flavours" below): drilling a backup of a Debian DC on a Fedora drill
+  host, or the reverse, is not supported and is refused before the
+  sandbox starts.
 - Checks: archive SHA-256, LDAP rootDSE, three DNS SRV records, a
   Kerberos TGT for a probe account (a plain user with no rights), the user
   count within the range counted around the backup, and sample SIDs
@@ -201,9 +207,26 @@ while others live, accidental deletion, key loss) are in the
   checks passed. Plaintext is shredded afterwards.
 - The drill host also alerts when the newest backup in the bucket is too
   old: a watchdog off the DC that keeps working if the DC's timer dies.
-- Drills currently run unconfined under SELinux (namespaces, mounts,
-  Samba as root); the drill host is a separate machine. The sandbox
+- Drills currently run unconfined under SELinux (namespaces, mounts, a
+  user namespace); the drill host is a separate machine. The sandbox
   confines them itself (below).
+
+### KDC flavours
+
+Samba builds with one of two KDCs: Heimdal, embedded in Samba (Debian and
+Ubuntu packages), or MIT Kerberos, `krb5kdc` with Samba's KDB plugin
+(Fedora and RHEL packages). A restored domain keeps the KDC files of the
+build that made the backup, and the two do not read each other's: an MIT
+build needs `private/kdc.conf`, which a Heimdal DC never wrote. Drilling a
+backup on a host of the other flavour is therefore not supported.
+
+Before the sandbox starts, the drill compares the two: the backup is an
+MIT build's when it carries `private/kdc.conf`, a Heimdal build's
+otherwise; the drill host's flavour comes from its Samba Python bindings
+(`samba.is_heimdal_built()`, run with the interpreter of `samba-tool`). A
+mismatch fails the drill with that reason in the report, and so does a
+drill host whose flavour cannot be determined. Run the drill host on the
+same distribution family as the DCs.
 
 ## What a backup can make the restoring host do
 
@@ -281,8 +304,11 @@ in this order, and fails the drill if any layer cannot be set up (it never
 runs with less):
 
 1. Namespaces: network (loopback and a dummy interface on 192.0.2.10, no
-   route anywhere), mount (private), PID, UTS (host name of the restored
-   DC) and IPC.
+   route anywhere, every port bindable without privileges), mount
+   (private), PID, UTS (host name of the restored DC) and IPC. The drill's
+   work directory (the decrypted backup, the spec, the generated
+   `smb.conf`) is handed to the user namespace's range (step 3); the
+   directory above it stays root's, 0700.
 2. A new root: a tmpfs holding read-only binds of `/usr` (and the `/bin`,
    `/sbin`, `/lib*` links or directories), a short list of `/etc` entries
    (`passwd`, `group`, `nsswitch.conf`, `host.conf`, `gai.conf`,
@@ -298,14 +324,32 @@ runs with less):
    and `/var`, and the drill's work directory (read-write, same path).
    `pivot_root` into it, the old root detached, the root itself read-only.
    The drill identity, the other credentials, the drill state and the rest
-   of the host's `/etc` are not in it.
-3. Capabilities: the bounding, permitted and effective sets are cut to
+   of the host's `/etc` are not in it. `/run`, `/tmp` and `/var` belong to
+   the user namespace's root.
+3. A user namespace: everything from here on (samba-tool, Samba, the
+   checks) runs in a second stage, as root of a new user namespace whose
+   IDs 0 to 4194303 map to host IDs starting at `drill.userns_base`
+   (default 1879048192, above the container ranges systemd allocates and
+   below its foreign range; nothing else on the host may use that range).
+   The range covers the IDs Samba hands out on a DC (`idmap.ldb` starts at
+   3000000), so smbd can switch to them. The stage checks its own ID maps
+   before going on and holds no capability in the host's initial user
+   namespace. It mounts a tmpfs it owns on the restore target: Samba
+   writes the sysvol ACLs into the `security.NTACL` attribute, which needs
+   `CAP_SYS_ADMIN` in the user namespace that owns the file system, and on
+   that tmpfs that is its own. The restored domain therefore lives in
+   memory (the tmpfs may take up to half of it) and is gone when the
+   sandbox exits. The first stage, still host root, starts the second,
+   then drops every capability but `CAP_KILL` (to stop the second stage on
+   timeout) and installs the seccomp filter of step 5 while it waits.
+4. Capabilities: the bounding, permitted and effective sets are cut to
    `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_FOWNER`,
    `CAP_FSETID`, `CAP_KILL`, `CAP_SETGID`, `CAP_SETUID`,
-   `CAP_NET_BIND_SERVICE` and `CAP_SYS_ADMIN`; inheritable and ambient are
-   cleared. `CAP_SYS_ADMIN` stays because samba-tool and Samba write the
-   sysvol ACLs into the `security.NTACL` extended attribute.
-4. `no_new_privs`, not dumpable (a root child cannot read the sandbox's
+   `CAP_NET_BIND_SERVICE` and `CAP_SYS_ADMIN`, capabilities in the user
+   namespace only; inheritable and ambient are cleared. `CAP_SYS_ADMIN`
+   stays because samba-tool and Samba write the sysvol ACLs into the
+   `security.NTACL` extended attribute.
+5. `no_new_privs`, not dumpable (a root child cannot read the sandbox's
    memory, which holds the probe password), and a seccomp filter that
    refuses mounting and `pivot_root`, `unshare`, `setns` and `clone` with
    namespace flags (`clone3` answers ENOSYS so the C library falls back to
@@ -318,14 +362,26 @@ The checks read the kernel's own view (`/proc/thread-self/status`) before
 samba-tool runs. All of it is applied to the sandbox's main thread, which
 starts every child (samba-tool, samba), so the children inherit it; the
 filter and `no_new_privs` cover every thread. The integration tests run
-the same code as root of an unprivileged user namespace where the host
-allows one.
+the first stage's setup and confinement as root of an unprivileged user
+namespace where the host allows one; the second stage's mapping of a
+4194304-ID range needs host root and is checked on a lab drill host.
 
-What this does not give: "root" in the sandbox is still root on the host,
-with the capabilities above, on the files it can see (the work directory
-and the read-only system binds). It cannot mount, load code into the
-kernel, reach the host's other files, its devices or the network, or see
-other processes. The decrypted backup it sees is the one it was given.
+What this gives: "root" in the sandbox is an unprivileged range of host
+IDs. On the host it owns only the drill's work directory; it cannot
+mount, load code into the kernel, reach the host's other files, its
+devices or the network, signal or trace the first stage, or see other
+processes. The decrypted backup it sees is the one it was given.
+
+When the host cannot create the user namespace (user namespaces disabled
+by sysctl, by the unit's `RestrictNamespaces=`, or by the kernel), the
+drill fails, with the reason in the report. An operator who accepts the
+weaker sandbox can set `drill.accept_no_userns = true` (or run
+`drill --accept-no-userns`): the restored DC then runs as host root with
+the capabilities of step 4 on the work directory, the drill report says
+so in its `sandbox` check, and the drill host logs a warning. On such a
+host, a drill host that must not trust its backups should run each drill
+in a throwaway virtual machine instead, with the drill identity outside
+it.
 
 The drill unit (`conductor-backup-drill.service`) confines the service as
 a whole on top of that: a capability bounding set limited to the
@@ -335,39 +391,12 @@ state directory is writable), `ProtectHome`, `PrivateTmp`,
 `PrivateDevices`, the credentials directory inaccessible except through
 `$CREDENTIALS_DIRECTORY`, `ProtectProc=invisible`, the kernel protections
 (tunables, modules, logs, control groups, clock), `RestrictNamespaces`
-to the five namespaces the sandbox creates, `RestrictAddressFamilies`
+to the six namespaces the sandbox creates, `RestrictAddressFamilies`
 (Unix, IPv4, IPv6, netlink), `RestrictSUIDSGID` and a system call filter
 (`@system-service`, plus `@mount`, `@sandbox` and `sethostname` for the
 sandbox's setup). `ProtectHostname` is not set: it would forbid naming the
 sandbox's own UTS namespace. `MemoryDenyWriteExecute` is not set either:
 samba-tool's Python modules may need writable executable memory.
-
-#### Open: a user namespace
-
-The next step is a user namespace, so that the sandbox's root maps to an
-unprivileged range of host IDs. It is not done yet because of three
-requirements that need a lab run with a real Samba 4.22 restore:
-
-- Samba writes sysvol ACLs to `security.NTACL`. Writing a `security.*`
-  attribute needs `CAP_SYS_ADMIN` in the user namespace that owns the
-  file system. On the host's disk that is the initial namespace, which a
-  user namespace never has. A restore target on a tmpfs mounted inside the
-  user namespace would satisfy it (the namespace owns that tmpfs), at the
-  cost of holding the restored domain in memory. Setting
-  `acl_xattr:security_acl_name = user.NTACL` (what the container images
-  do) avoids the capability, but samba-tool's restore loads the
-  configuration it rewrites itself, without that parameter, when it
-  restores sysvol, so it would need a samba-tool option that survives
-  that rewrite.
-- The decrypted Samba backup must be readable by the mapped root: the
-  drill would hand it over by descriptor or change its owner to the
-  mapped range before starting the sandbox.
-- smbd switches to other user IDs for file access, so the mapping needs a
-  range (65536 IDs reserved for drills), not a single ID.
-
-Until then, a drill host that must not trust its backups can run each
-drill in a throwaway virtual machine instead, with the drill identity
-outside it.
 
 ### Files root writes after the restore
 
@@ -399,8 +428,10 @@ way.
 - Drills off the DC in a namespace sandbox: decryption keys stay away
   from DCs, and a restored copy can never talk to the live domain.
 - Backup content is hostile input on the drill host: allowlisted
-  configuration, scanned archives, a pivoted root, reduced capabilities and
-  a seccomp filter, failing closed.
+  configuration, scanned archives, a pivoted root, a user namespace,
+  reduced capabilities and a seccomp filter, failing closed.
+- Drills only between Samba builds with the same KDC: a cross-flavour
+  restore is not supported and is refused up front.
 - Own S3 client instead of an SDK: a small dependency tree, checked
   against published signing examples and an S3-compatible server.
 - Fixed hourly timer with policy-driven slots: no unit edits or reloads
