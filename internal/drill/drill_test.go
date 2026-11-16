@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/openbasalt/samba-conductor-ad/helper"
+	"github.com/openbasalt/samba-conductor-ad/sambatool"
 	"github.com/openbasalt/samba-conductor-backup/internal/config"
 	"github.com/openbasalt/samba-conductor-backup/internal/dest"
 	"github.com/openbasalt/samba-conductor-backup/internal/manifest"
@@ -392,5 +394,41 @@ func TestTruncateError(t *testing.T) {
 	got := truncateError(long)
 	if len(got) > maxReportError || !strings.HasSuffix(got, "...") || !utf8.ValidString(got) {
 		t.Fatalf("%d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+}
+
+// TestDrillSysvolNTACLs: a backup without sysvol NT ACLs (as the
+// least-privilege backup account takes them) says so in the config check
+// and asks the sandbox to rebuild them.
+func TestDrillSysvolNTACLs(t *testing.T) {
+	f := newFixture(t)
+	f.putBackup(t, "20261003T023000Z-dc1", f.drillID.Recipient())
+	rep, err := f.d.Run(context.Background(), Options{Force: true})
+	if err != nil || f.spec.SysvolNTACLs {
+		t.Fatalf("%v %+v", err, f.spec)
+	}
+	if c := rep.Drill.Checks[1]; c.Name != "config" || !strings.Contains(c.Detail, "no sysvol NT ACLs in the backup (rebuilt at restore)") {
+		t.Fatalf("config check %+v", c)
+	}
+}
+
+// TestSysvolACLCheck: the sandbox's sysvol_acl check, from samba-tool's
+// result (a stand-in here).
+func TestSysvolACLCheck(t *testing.T) {
+	for _, c := range []struct {
+		exit   int
+		ok     bool
+		detail string
+	}{{0, true, "rebuilt from the directory (the backup carries no NT ACLs); sysvolcheck passed"}, {255, false, "sysvolreset failed"}} {
+		bin := filepath.Join(t.TempDir(), "samba-tool")
+		script := "#!/bin/sh\necho 'ERROR: lab' >&2\nexit " + strconv.Itoa(c.exit) + "\n"
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		r := &sambatool.Runner{Binary: bin, Credentials: sambatool.LocalSystem{}}
+		got := sysvolACLCheck(context.Background(), r, SandboxSpec{TargetDir: "/var/lib/x/restore"})
+		if got.Name != "sysvol_acl" || got.OK != c.ok || !strings.Contains(got.Detail, c.detail) {
+			t.Errorf("exit %d: %+v", c.exit, got)
+		}
 	}
 }

@@ -15,10 +15,15 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
 ## What it does
 
 - Online backups with `samba-tool domain backup online`: no downtime,
-  every partition, the domain's secrets and SYSVOL (with its NT ACLs).
+  every partition, the domain's secrets and the SYSVOL files.
   `conductor-helper` (root) runs it over loopback with a dedicated account
   that holds only the three replication rights (not an administrator); the
   password is a systemd credential of the helper and never on a command line.
+  That account cannot read the SYSVOL NT ACLs, so the backup carries none:
+  restores and drills rebuild them from the group policy objects in the
+  directory (`samba-tool ntacl sysvolreset`) and verify them (`samba-tool
+  ntacl sysvolcheck`). ACLs set by hand on SYSVOL outside group policy
+  management are not preserved.
 - Everything a full recovery needs in one archive: the samba-tool
   backup, conductor's SQLite state (audit log, settings, 2FA secrets still
   sealed; sessions removed), `smb.conf`, `krb5.conf`, the conductor,
@@ -51,7 +56,9 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
 - Restore (`restore`): a real AD restore with `samba-tool domain backup
   restore` (original SIDs and GUIDs, FSMO roles seized, old DCs removed,
   krbtgt renewed), after checking the download against the signed manifest,
-  and the exact next steps. The backup's own `smb.conf` is never loaded:
+  the SYSVOL ACLs rebuilt from the directory when the backup has none and
+  verified with `samba-tool ntacl sysvolcheck` (a failed check fails the
+  restore), and the exact next steps. The backup's own `smb.conf` is never loaded:
   samba-tool restores with an allowlisted configuration (see
   [docs/design.md](docs/design.md#what-a-backup-can-make-the-restoring-host-do)).
 - Restore drills (`drill`, on a drill host, never a DC): the newest backup
@@ -59,7 +66,10 @@ a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/b
   UTS and IPC namespaces; loopback and a dummy interface only), a minimal
   root of its own (no credentials in it), a user namespace mapped to
   unprivileged host IDs (no capability on the host), reduced capabilities,
-  `no_new_privs` and a seccomp filter, started, and checked: LDAP answers, DNS SRV records exist, Kerberos sign-in of a
+  `no_new_privs` and a seccomp filter, started, and checked: the SYSVOL
+  ACLs are rebuilt from the directory when the backup has none and pass
+  `samba-tool ntacl sysvolcheck` (the `sysvol_acl` check), LDAP answers,
+  DNS SRV records exist, Kerberos sign-in of a
   probe account works, the user count matches the source, sample SIDs are
   unchanged. The plaintext is shredded, the measured restore time (RTO) and
   every check go into a signed report that conductor shows and audits.
@@ -252,6 +262,11 @@ before risky local maintenance.
 
 ## Limits
 
+- SYSVOL NT ACLs are not in the backup (the backup account cannot read
+  them): a restore rebuilds them from the group policy objects in the
+  directory and verifies them. ACLs set by hand on SYSVOL files or folders
+  outside group policy management come back as the directory defines
+  them; set them again after a restore.
 - One PUT per object: archives up to 5 GiB on S3 (multipart is not
   implemented).
 - Plaintext lives briefly in the helper's `/tmp`; on hosts where `/tmp` is

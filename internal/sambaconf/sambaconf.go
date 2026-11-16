@@ -210,6 +210,9 @@ type Expect struct {
 	// smb.conf checks: the drill refuses a backup whose flavour differs
 	// from the drill host's.
 	BackupKDC string
+	// SysvolNTACLs: the backup carries the sysvol NT ACLs (set by
+	// Prepare); without them the restore rebuilds them (SysvolACLs).
+	SysvolNTACLs bool
 }
 
 // Validate checks the expectation itself.

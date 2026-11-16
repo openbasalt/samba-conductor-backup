@@ -27,7 +27,7 @@ and the recovery procedures in the
 
 - `samba-tool domain backup online` replicates the database over DRS like
   a joining DC would: no downtime, every partition, the domain's secrets,
-  and SYSVOL with its NT ACLs. Offline backups (which also keep local-only
+  and the SYSVOL files. Offline backups (which also keep local-only
   state) are not automated; they suit a DC with broken replication or a
   single DC taken down for maintenance.
 - The helper runs it over loopback (`--server=127.0.0.1`, inside the
@@ -199,7 +199,8 @@ while others live, accidental deletion, key loss) are in the
   flavours" below): drilling a backup of a Debian DC on a Fedora drill
   host, or the reverse, is not supported and is refused before the
   sandbox starts.
-- Checks: archive SHA-256, LDAP rootDSE, three DNS SRV records, a
+- Checks: archive SHA-256, the SYSVOL ACLs (`sysvol_acl`, see "SYSVOL
+  ACLs" below), LDAP rootDSE, three DNS SRV records, a
   Kerberos TGT for a probe account (a plain user with no rights), the user
   count within the range counted around the backup, and sample SIDs
   (Administrator, the lowest-RID users, Domain Admins, Domain Users)
@@ -286,6 +287,34 @@ after cleaning, and may not contain substitutions (`%`).
 After a real restore, the operator's custom parameters (TLS files and
 DNS forwarders, for example) are in `etc/smb.conf.orig` for review; copy them over by
 hand, never the whole file.
+
+### SYSVOL ACLs
+
+`samba-tool domain backup online` stores each SYSVOL entry's NT ACL as a
+`<path>.NTACL` member of the nested `sysvol.tar.gz`, read over SMB with the
+backup's credentials. The backup account holds only the replication
+rights, which do not let it read them, so the backups carry no NT ACLs
+and `samba-tool domain backup restore` leaves SYSVOL with default
+permissions. Granting that account more (reading every security
+descriptor on SYSVOL) is not worth it: the ACLs that matter are derived
+from the directory.
+
+So `restore` and the drill, after samba-tool restored the domain and the
+restored `smb.conf` was checked:
+
+1. scan the backup for `.NTACL` members (the drill's `config` check and
+   the restore's output say whether there are any);
+2. when there are none, run `samba-tool ntacl sysvolreset`, which rebuilds
+   every SYSVOL ACL (the NT ACL and the POSIX ACL Samba derives from it)
+   from the group policy objects in the restored directory;
+3. in every case run `samba-tool ntacl sysvolcheck`. A failure fails the
+   restore, and fails the drill through its `sysvol_acl` check.
+
+In the drill both run in the sandbox, as root of its user namespace, on
+the restore tmpfs it owns; the IDs in the POSIX ACLs (from 3000000, as
+`idmap.ldb` hands them out) fall inside the mapped range. ACLs set by hand
+on SYSVOL outside group policy management are not preserved: they come
+back as the directory defines them.
 
 ### The Samba backup file
 

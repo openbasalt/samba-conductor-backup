@@ -66,7 +66,10 @@ type Result struct {
 	Conductor  string // where conductor's database is
 	// ConductorInstalled: the database was put in place for conductor.
 	ConductorInstalled bool
-	Duration           time.Duration
+	// SysvolACL says how the sysvol ACLs were made right (restored from
+	// the backup or rebuilt from the directory) and verified.
+	SysvolACL string
+	Duration  time.Duration
 }
 
 // Run downloads, verifies, decrypts and restores a backup.
@@ -187,7 +190,19 @@ func Run(ctx context.Context, s dest.Store, trusted []sign.PublicKey, o Options,
 	if len(conf.Dropped) > 0 {
 		fmt.Fprintf(log, "restored smb.conf: dropped %s\n", strings.Join(conf.Dropped, ", "))
 	}
-	res := &Result{Meta: meta, BackupID: b.ID, ServerName: name, SambaDir: sambaDir, FilesDir: filepath.Join(o.Target, "files")}
+	// The sysvol ACLs: backups taken with the least-privilege backup
+	// account carry no NT ACLs, so they are rebuilt from the directory;
+	// either way they must pass sysvolcheck, or the restore fails.
+	if !expect.SysvolNTACLs {
+		fmt.Fprintln(log, "warning: the backup carries no sysvol NT ACLs; rebuilding them from the directory (samba-tool ntacl sysvolreset)")
+	}
+	aclDetail, err := sambaconf.SysvolACLs(ctx, r, filepath.Join(sambaDir, "etc", "smb.conf"), expect.SysvolNTACLs)
+	if err != nil {
+		return nil, fmt.Errorf("%w (the restored domain is in %s)", err, sambaDir)
+	}
+	fmt.Fprintln(log, "sysvol ACLs:", aclDetail)
+	res := &Result{Meta: meta, BackupID: b.ID, ServerName: name, SambaDir: sambaDir, FilesDir: filepath.Join(o.Target, "files"),
+		SysvolACL: aclDetail}
 
 	// Host files (configs, TLS) next to the restored domain.
 	if src := filepath.Join(plain, "files"); exists(src) {
