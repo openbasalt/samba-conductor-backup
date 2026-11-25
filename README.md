@@ -226,6 +226,12 @@ the Samba services, put the drill credentials in
 then `systemctl enable --now conductor-backup-drill.timer`. (The package also
 creates the unused `conductor-backup` user there; drills run as root.)
 
+`conductor-backup drill` reads `/etc/conductor-backup/drill.toml` unless
+`--config` names another file, so a manual drill on the drill host is
+`sudo conductor-backup drill --now`; the other commands default to
+`conductor-backup.toml`, the DC's configuration (the package installs both
+files everywhere, the DC one with example values on a drill host).
+
 From source:
 
 ```sh
@@ -252,7 +258,7 @@ conductor-backup list [--destination N]
 conductor-backup verify ID|latest           # download + SHA-256, no decryption
 conductor-backup prune [--dry-run]
 conductor-backup restore ID|latest --identity KEY --target DIR --newservername NAME [--with-conductor-state] [--host-ip IP] [--accept-older]
-conductor-backup drill [--now] [--backup ID] [--accept-older] [--accept-no-userns]
+conductor-backup drill [--now] [--backup ID] [--accept-older] [--accept-no-userns]   # default --config: drill.toml
 conductor-backup keygen signing|age --out FILE
 conductor-backup pubkey FILE
 ```

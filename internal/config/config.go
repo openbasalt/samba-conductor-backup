@@ -30,6 +30,11 @@ import (
 // DefaultPath is where the configuration lives.
 const DefaultPath = "/etc/conductor-backup/conductor-backup.toml"
 
+// DefaultDrillPath is the configuration of a drill host, the default of
+// the drill command (the packages install both files on every host; the
+// drill timer names this one too).
+const DefaultDrillPath = "/etc/conductor-backup/drill.toml"
+
 // Config is the whole file.
 type Config struct {
 	// Realm of the domain, e.g. "EXAMPLE.COM".
