@@ -71,7 +71,8 @@ Keys:
   keygen age --out FILE       age identity (prints the recipient)
   pubkey FILE                 public key of a signing key
 
-Global: --config FILE (default /etc/conductor-backup/conductor-backup.toml)
+Global: --config FILE (default /etc/conductor-backup/conductor-backup.toml;
+for drill, /etc/conductor-backup/drill.toml)
 `
 
 // The drill sandbox confines its main thread and starts every child from
@@ -153,8 +154,34 @@ func main() {
 }
 
 func flags(name string) (*flag.FlagSet, *string) {
+	return flagsWith(name, config.DefaultPath)
+}
+
+func flagsWith(name, defaultConfig string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	return fs, fs.String("config", config.DefaultPath, "configuration file")
+	return fs, fs.String("config", defaultConfig, "configuration file")
+}
+
+// drillConfig checks the configuration the drill command reads: without
+// --config it is the drill host's drill.toml, and a host without that file
+// gets an error that says so instead of a missing-file error (or, worse,
+// the DC-side conductor-backup.toml, whose example values the packages
+// install on drill hosts too).
+func drillConfig(fs *flag.FlagSet, path string) error {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			explicit = true
+		}
+	})
+	if explicit {
+		return nil
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s not found: drills run on a drill host with its drill.toml (see the README, \"Install a drill host\"); "+
+			"pass --config FILE for another location", path)
+	}
+	return nil
 }
 
 // parse accepts flags before and after positional arguments.
@@ -520,12 +547,15 @@ func localMarks(cfg *config.Config) []runner.Mark {
 }
 
 func cmdDrill(ctx context.Context, log *slog.Logger, args []string) error {
-	fs, path := flags("drill")
+	fs, path := flagsWith("drill", config.DefaultDrillPath)
 	now := fs.Bool("now", false, "drill the newest backup now (without a request)")
 	backup := fs.String("backup", "", "with --now: this backup")
 	acceptOlder := fs.Bool("accept-older", false, "accept that the newest backup is older than one seen before (newer ones were removed)")
 	acceptNoUserNS := fs.Bool("accept-no-userns", false, "run the restored DC as host root (reduced capabilities) when the host cannot create a user namespace")
 	parse(fs, args)
+	if err := drillConfig(fs, *path); err != nil {
+		return err
+	}
 	cfg, err := config.Load(*path)
 	if err != nil {
 		return err

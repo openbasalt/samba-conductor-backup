@@ -21,6 +21,8 @@ On a domain controller (conductor and conductor-helper installed):
 
 On a drill host (never a DC): drill.toml, its credentials, then
   sudo systemctl enable --now conductor-backup-drill.timer
+A drill on demand there: sudo conductor-backup drill --now (the drill
+command reads drill.toml unless --config names another file).
 
 "apt purge conductor-backup" deletes /etc/conductor-backup (signing key, S3
 keys, drill identity) and /var/lib/conductor-backup; backups already in a

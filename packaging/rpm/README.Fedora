@@ -29,6 +29,8 @@ another port than 443 or 9000: semanage port -a -t http_port_t -p tcp <port>.
 
 On a drill host (never a DC): drill.toml, its credentials, then
   sudo systemctl enable --now conductor-backup-drill.timer
+A drill on demand there: sudo conductor-backup drill --now (the drill
+command reads drill.toml unless --config names another file).
 
 "dnf remove conductor-backup" stops and disables the units, removes the
 packaged files and the helper drop-in link; it keeps the credentials
