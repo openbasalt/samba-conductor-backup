@@ -7,9 +7,17 @@ the family's [architecture.md](https://github.com/openbasalt/samba-conductor-doc
 
 Container image: `docker.io/openbasalt/samba-conductor-backup`, tags `0.1.1` and `latest` (the containers release; conductor-backup 0.1.0 inside), also on `ghcr.io/openbasalt` with the same digests, see [containers.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/containers.md).
 
-Status: 0.1.1 released (signed GitHub release `v0.1.1`, APT packages
-`0.1.1-1`), a security update of 0.1.0 built with Go 1.27.3; the
-container image above still carries 0.1.0. Validated in the two-DC lab, including
+Status: 0.2.0 released on 2026-11-24 (signed tag `v0.2.0`, packages
+`0.2.0-1` in the APT `stable` suite and in basalt-tools), built with Go
+1.27.4; the container image above still carries 0.1.0. 0.2.0 treats a
+decrypted backup as untrusted input on the restore and drill hosts, runs
+the restored DC of a drill in a user namespace, refuses drills across
+Kerberos implementations, detects a rollback of the newest backup, and
+rebuilds and verifies the SYSVOL ACLs at every restore and drill. Drill
+hosts now need user namespaces and the same distribution family as the
+DCs: read
+[upgrading.md](https://github.com/openbasalt/samba-conductor-docs/blob/main/upgrading.md)
+before upgrading. Validated in the two-DC lab, including
 a full-forest restore exercise (<https://github.com/openbasalt/samba-conductor/blob/main/docs/usage-p3.md>).
 
 ## What it does
